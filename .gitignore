@@ -1,0 +1,12 @@
+test.py
+token*
+.env
+.flake8
+.pylintrc
+.vscode/
+**/__pycache__/
+build/
+tesla_api.egg-info/
+dist/
+json/
+apikey 
