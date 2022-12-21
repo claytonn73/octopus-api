@@ -9,8 +9,8 @@ from octopusapi.api import OctopusClient
 
 async def main():
     client = OctopusClient(apikey=api_key,
-                           account="A-16B54A69",
-                           postcode="WA46RP",
+                           account="A-xxBxxAxx",
+                           postcode="xxx xxx",
                            )
 
 asyncio.run(main())
