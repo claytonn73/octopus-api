@@ -6,7 +6,7 @@ import asyncio
 import logging
 import logging.handlers
 from datetime import datetime
-import dotenv
+from dotenv import dotenv_values
 
 from influxconnection import InfluxConnection
 
@@ -28,18 +28,19 @@ async def main():
     """Load historical data into influxdb."""
     global logger
     logger = get_logger()
-    env = dotenv.dotenv_values(os.path.expanduser("~/.env"))
-
+    env_path = os.path.expanduser('~/.env')
+    if os.path.exists(env_path):
+        env = dotenv_values(env_path)
     with InfluxConnection() as connection:
 
-        with OctopusClient(apikey=env['octopus_apikey'], account=env['octopus_account']) as client:
+        with OctopusClient(apikey=env.get('octopus_apikey'), account=env.get('octopus_account')) as client:
 
             # client.set_period_from("2021-07-01T00:00")
             # client.set_period_to("2021-08-01T00:00")
             client.set_page_size(25000)
-            charge = client.get_standing_charge()
+            charge = client.electricity_standing_charge
             influx_tags = {
-                'account_number': client.get_account_number(),
+                'account_number': client.account_number,
             }
             logger.info("Adding Octopus Cost information to influxdb")
             # Obtain half hour cost figures and add to influxdb

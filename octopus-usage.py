@@ -2,15 +2,14 @@
 """Gas and Electricity usage from the Octopus API."""
 
 
-import os
 import asyncio
 import logging
 import logging.handlers
-import dotenv
+import os
 
-from dateutil import parser
+from dotenv import dotenv_values
+
 from influxconnection import InfluxConnection
-
 from octopusapi.api import OctopusClient
 
 
@@ -18,8 +17,9 @@ def get_logger():
     """Log messages to the syslog."""
     logger = logging.getLogger()
     handler = logging.handlers.SysLogHandler(facility=logging.handlers.SysLogHandler.LOG_DAEMON, address='/dev/log')
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.WARN)
     logger.addHandler(handler)
+    # logger.addHandler(logging.StreamHandler(sys.stdout))
     log_format = 'python[%(process)d]: [%(levelname)s] %(filename)s:%(funcName)s:%(lineno)d \"%(message)s\"'
     handler.setFormatter(logging.Formatter(fmt=log_format))
     return logger
@@ -27,46 +27,48 @@ def get_logger():
 
 def log_usage(usage, influxdb, influx_tags, measurement):
     """Load usage data into influxdb."""
-    for data in usage:
-        thetime = parser.parse(data['interval_start'])
-        influx_fields = {
-            'consumption': data['consumption'],
-            'month': thetime.strftime("%b %Y")
-        }
-        influx_data = [
-            {
-                'measurement': measurement,
-                'time': data['interval_start'],
-                'tags': influx_tags,
-                'fields': influx_fields,
+    if usage is not None:
+        for data in usage:
+            influx_fields = {
+                'consumption': data.consumption,
+                'month': data.interval_start.strftime("%b %Y")
             }
-        ]
-        influxdb.write_points(influx_data)
+            influx_data = [
+                {
+                    'measurement': measurement,
+                    'time': data.interval_start.strftime("%Y-%m-%dT%H:%MZ"),
+                    'tags': influx_tags,
+                    'fields': influx_fields,
+                }
+            ]
+            influxdb.write_points(influx_data)
 
 
 async def main():
     """Query historical data and load into influxdb."""
     logger = get_logger()
-    env = dotenv.dotenv_values(os.path.expanduser("~/.env"))
+    env_path = os.path.expanduser('~/.env')
+    if os.path.exists(env_path):
+        env = dotenv_values(env_path)
 
     with InfluxConnection() as connection:
-        with OctopusClient(apikey=env['octopus_apikey'], account=env['octopus_account']) as client:
+        with OctopusClient(apikey=env.get('octopus_apikey'), account=env.get('octopus_account')) as client:
 
-            client.set_page_size(9999)
+            client.set_page_size(25000)
             client.set_group_by("day")
             influx_tags = {
-                'account_number': client.get_account_number(),
+                'account_number': client.account_number,
             }
 
             logger.info("Adding Octopus Usage information to influxdb")
-            usage = client.get_gas_consumption() 
-            # usage = client.get_gas_consumption(intervals=365, ago=365, days=365)
+            usage = client.get_gas_consumption(ago=30, days=30)
+
             log_usage(usage, connection.influxdb, influx_tags, 'gas_consumption')
 
-            usage = client.get_electricity_consumption()
+            usage = client.get_electricity_consumption(ago=30, days=30)
             log_usage(usage, connection.influxdb, influx_tags, 'electricity_consumption')
 
-            usage = client.get_electricity_export()
+            usage = client.get_electricity_export(ago=30, days=30)
             log_usage(usage, connection.influxdb, influx_tags, 'electricity_export')
 
 if __name__ == "__main__":

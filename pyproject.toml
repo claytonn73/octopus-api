@@ -1,6 +1,31 @@
 [build-system]
 requires = [
     "setuptools>=42",
-    "wheel"
+    "wheel",
+    "pep517>=0.11",
 ]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "octopusapi"
+version = "1.0.0"
+dependencies = [
+    "dotenv",
+    "requests",
+    "python-dateutil",
+    "influxdb",
+]
+authors = [
+  { name="Nick Clayton", email="nick.m.clayton@gmail.com" },
+]
+description = "API for Octopus Energy"
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/claytonn73/octopus_api"

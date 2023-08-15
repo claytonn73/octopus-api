@@ -1,24 +1,27 @@
 #!/usr/bin/env python3
 """Get peak and offpeak usage from octopus API."""
 
+import argparse
 import asyncio
 import logging
 import logging.handlers
-import sys
 import os
-import argparse
-import dateutil
-import dotenv
-from datetime import datetime
-from octopusapi.api import OctopusClient
+import sys
+from datetime import datetime, timedelta
+
+import dateutil.parser
+from dotenv import dotenv_values
+from dateutil.relativedelta import relativedelta
+
 from influxconnection import InfluxConnection
+from octopusapi.api import OctopusClient
 
 
 def get_logger():
     """Log message to sysout."""
     logger = logging.getLogger()
     logger.addHandler(logging.StreamHandler(sys.stdout))
-    logger.setLevel(logging.ERROR)
+    logger.setLevel(logging.WARN)
     return logger
 
 
@@ -35,16 +38,19 @@ def getopts(argv):
 
 def log_usage(usage, influxdb, influx_tags, measurement):
     """Load historical data into influxdb."""
+    influx_fields = {}
     for data in usage:
-        influx_fields = {
-            'peak consumption': data['peak'],
-            'offpeak consumption': data['offpeak'],
-            'month': data['interval_start'].strftime("%b %Y")
-        }
+        if usage[data].get("Standard") is not None:
+            influx_fields.update({'standard consumption': float(round(usage[data]['Standard'], 2))})
+        if usage[data].get("Peak") is not None:
+            influx_fields.update({'peak consumption': float(round(usage[data]['Peak'], 2))})
+        if usage[data].get("OffPeak") is not None:
+            influx_fields.update({'offpeak consumption': float(round(usage[data]['OffPeak'], 2))})
+        influx_fields.update({'month': dateutil.parser.parse(data).strftime("%b %Y")})
         influx_data = [
             {
                 'measurement': measurement,
-                'time': data['interval_start'].strftime("%m/%d/%Y"),
+                'time': dateutil.parser.parse(data).strftime("%m/%d/%Y"),
                 'tags': influx_tags,
                 'fields': influx_fields,
             }
@@ -56,7 +62,9 @@ async def main(reset):
     """Query historyical data and output peak and offpeak usage by day."""
     global logger
     logger = get_logger()
-    env = dotenv.dotenv_values(os.path.expanduser("~/.env"))
+    env_path = os.path.expanduser('~/.env')
+    if os.path.exists(env_path):
+        env = dotenv_values(env_path)
 
     with InfluxConnection() as connection:
         if reset is True:
@@ -64,73 +72,35 @@ async def main(reset):
             connection.influxdb.create_database('octopus')
             connection.influxdb.switch_database('octopus')
 
-        with OctopusClient(apikey=env['octopus_apikey'], account=env['octopus_account']) as client:
+        with OctopusClient(apikey=env.get('octopus_apikey'), account=env.get('octopus_account')) as client:
             # client.set_period_from("2020-07-01T00:00")
             # client.set_period_to("2021-08-01T00:00")
             client.set_page_size(25000)
             # client.set_group_by("hour")
             influx_tags = {
-                'account_number': client.get_account_number(),
+                'account_number': client.account_number,
             }
             # Query from the beginning of last month
             now = datetime.now()
-            lastmonth = datetime(now.year, now.month - 1, 1).date()
-            querydays = (now.date()-lastmonth).days
+            monthsago = 0
+            lastmonth = datetime(now.year, now.month, 1)-timedelta(days=1) + relativedelta(months=-monthsago)
+            # lastmonth = datetime(now.year, now.month, 1)-timedelta(days=1)-timedelta(months=monthsago)
+            firstofmonth = datetime(lastmonth.year, lastmonth.month, 1).date()
+            querydays = (lastmonth.date()-firstofmonth).days
+            startday = (now.date()-firstofmonth).days
+            print(lastmonth, firstofmonth, querydays, startday)
             if reset is True:
                 querydays = 365
             if querydays > 0:
-                usage = client.get_electricity_consumption(
-                    intervals=25000, ago=querydays, days=querydays)
-                # usage = client.get_electricity_consumption(intervals=25000, ago=365, days=365)
-                daily = {}
-                monthly = {}
-                if usage is not None:
-                    for entry in usage:
-                        start = dateutil.parser.parse(entry["interval_start"])
-                        time = start.time()
-                        thedate = start.date()
-                        themonth = datetime(start.year, start.month, 1).date()
-                        if daily.get(thedate) is None:
-                            daily[thedate] = {}
-                            daily[thedate]["month"] = themonth
-                            daily[thedate]["peak"] = 0
-                            daily[thedate]["offpeak"] = 0
-                        if monthly.get(themonth) is None:
-                            monthly[themonth] = {}
-                            monthly[themonth]["peak"] = 0
-                            monthly[themonth]["offpeak"] = 0
-                        kwh = entry["consumption"]
-                        if time < datetime.strptime('00:15:00', '%H:%M:%S').time():
-                            daily[thedate]["peak"] += round(kwh, 3)
-                            monthly[themonth]["peak"] += round(kwh, 3)
-                        elif time > datetime.strptime('04:15:00', '%H:%M:%S').time():
-                            daily[thedate]["peak"] += round(kwh, 3)
-                            monthly[themonth]["peak"] += round(kwh, 3)
-                        else:
-                            daily[thedate]["offpeak"] += round(kwh, 3)
-                            monthly[themonth]["offpeak"] += round(kwh, 3)
-                theusage = []
-                for date in daily:
-                    dict = {}
-                    dict["interval_start"] = date
-                    dict["peak"] = round(daily[date]["peak"], 2)
-                    dict["offpeak"] = round(daily[date]["offpeak"], 2)
-                    theusage.append(dict)
-                log_usage(theusage, connection.influxdb, influx_tags,
-                          'electricity_peak_offpeak_daily')
-                theusage = []
-                for date in monthly:
-                    dict = {}
-                    dict["interval_start"] = date
-                    dict["peak"] = round(monthly[date]["peak"], 2)
-                    dict["offpeak"] = round(monthly[date]["offpeak"], 2)
-                    theusage.append(dict)
-                log_usage(theusage, connection.influxdb, influx_tags,
+                usage = client.get_electricity_consumption_byrange(
+                    ago=startday, days=startday, daily=False)
+                log_usage(usage, connection.influxdb, influx_tags,
                           'electricity_peak_offpeak_monthly')
-
+                usage = client.get_electricity_consumption_byrange(
+                    ago=startday, days=startday, daily=True)
+                log_usage(usage, connection.influxdb, influx_tags,
+                          'electricity_peak_offpeak_daily')
 
 if __name__ == "__main__":
-
     args = getopts(sys.argv[1:])
-
     asyncio.run(main(args.reset))

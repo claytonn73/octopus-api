@@ -1,4 +1,4 @@
-test.py
+*test.py
 token*
 .env
 .flake8
@@ -10,3 +10,7 @@ tesla_api.egg-info/
 dist/
 json/
 apikey 
+*copy*
+*test*
+.gitignore  
+raw*

@@ -7,13 +7,13 @@ This is a package for connecting to the Octopus API.
 ```python
 from octopusapi.api import OctopusClient
 
-async def main():
+def main():
     client = OctopusClient(apikey=api_key,
-                           account="A-xxBxxAxx",
-                           postcode="xxx xxx",
+                           account="A-16B54A69",
+                           postcode="WA46RP",
                            )
 
-asyncio.run(main())
+main()
 ```
 
 ## Using the api_key
