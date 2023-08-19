@@ -84,14 +84,13 @@ class OctopusClient():
         """Close the requests session."""
         self._session.close()
 
-    def _set_tariff_code(self, tariff: str, product: str, agreements: dict) -> None:
-        """Iterate through the agreements for the account and add the current
-        agreement to the API arguments variable for the procut type passed."""
+    def _set_tariff_code(self, agreements: dict) -> None:
+        """Iterate through the agreements passed and add the current agreement to the API arguments."""
         for agreement in agreements:
             if self._is_current(agreement):
-                self.logger.info(f"{product} tariff is: {agreement.tariff_code}")
-                self._api_args.tariff = agreement.tariff_code
-                self._api_args.product = agreement.tariff_code[5:-2]
+                self.logger.info(f"tariff is: {agreement.tariff_code}")
+                self._api_args.tariff_code = agreement.tariff_code
+                self._api_args.product_code = agreement.tariff_code[5:-2]
                 return
         self._api_args.tariff = None
         self._api_args.product = None
@@ -394,10 +393,7 @@ class OctopusClient():
         for property in self._account_info.properties:
             for meter_point in property.electricity_meter_points:
                 if meter_point.is_export is False:
-                    for agreement in meter_point.agreements:
-                        if self._is_current(agreement):
-                            self._api_args.tariff_code = agreement.tariff_code
-                            self._api_args.product_code = agreement.tariff_code[5:-2]
+                    self._set_tariff_code(meter_point.agreements)
         data = self._call_api(api_name="Product")
         for entry in octopusapi.const.RegionID:
             if entry.name == self._account_info.regionid:
@@ -418,10 +414,7 @@ class OctopusClient():
         for property in self._account_info.properties:
             for meter_point in property.electricity_meter_points:
                 if meter_point.is_export is True:
-                    for agreement in meter_point.agreements:
-                        if self._is_current(agreement):
-                            self._api_args.tariff_code = agreement.tariff_code
-                            self._api_args.product_code = agreement.tariff_code[5:-2]
+                    self._set_tariff_code(meter_point.agreements)
         data = self._call_api(api_name="Product")
         for entry in octopusapi.const.RegionID:
             if entry.name == self._account_info.regionid:
@@ -439,13 +432,9 @@ class OctopusClient():
         """Returns the details for the gas product for the account
         deleting the regions that are not relevant for the account
         """
-
         for property in self._account_info.properties:
             for meter_point in property.gas_meter_points:
-                for agreement in meter_point.agreements:
-                    if self._is_current(agreement):
-                        self._api_args.tariff_code = agreement.tariff_code
-                        self._api_args.product_code = agreement.tariff_code[5:-2]
+                self._set_tariff_code(meter_point.agreements)
         data = self._call_api(api_name="Product")
         for entry in octopusapi.const.RegionID:
             if entry.name == self._account_info.regionid:
@@ -465,31 +454,33 @@ class OctopusClient():
         data = self._call_api(api_name="ElectricityStandardUnitRates")
         price_list = []
         price_dict = {}
+        prev_date = datetime.now().date()
         for entry in data.results:
-            if entry.value_inc_vat not in price_list:
-                price_list.append(entry.value_inc_vat)
-        price_list.sort()
-        if len(price_list) == 1:
-            price_dict[price_list[0]] = PriceType.STANDARD
-        elif len(price_list) == 2:
-            price_dict[price_list[0]] = PriceType.OFFPEAK
-            price_dict[price_list[1]] = PriceType.PEAK
-        elif len(price_list) == 4:
-            price_dict[price_list[0]] = PriceType.OFFPEAK
-            price_dict[price_list[1]] = PriceType.OFFPEAK
-            price_dict[price_list[2]] = PriceType.PEAK
-            price_dict[price_list[3]] = PriceType.PEAK
-        elif len(price_list) == 3:
-            price_dict[price_list[0]] = PriceType.OFFPEAK
-            price_dict[price_list[1]] = PriceType.STANDARD
-            price_dict[price_list[2]] = PriceType.PEAK
-        elif len(price_list) == 6:
-            price_dict[price_list[0]] = PriceType.OFFPEAK
-            price_dict[price_list[1]] = PriceType.OFFPEAK
-            price_dict[price_list[2]] = PriceType.STANDARD
-            price_dict[price_list[3]] = PriceType.STANDARD
-            price_dict[price_list[4]] = PriceType.PEAK
-            price_dict[price_list[5]] = PriceType.PEAK
+            current_date = entry.valid_from.date()
+            # Collect the prices for each date
+            if current_date == prev_date:
+                if entry.value_inc_vat not in price_list:
+                    if price_dict.get(entry.value_inc_vat) is None:
+                        price_list.append(entry.value_inc_vat)
+            # As we get to the next date evaluate the prices from the previous day
+            else:
+                price_list.sort()
+                # Set the price labels depending on if we have 1, 2 or 3 prices per day
+                if len(price_list) == 1:
+                    price_dict[price_list[0]] = PriceType.STANDARD
+                elif len(price_list) == 2:
+                    price_dict[price_list[0]] = PriceType.OFFPEAK
+                    price_dict[price_list[1]] = PriceType.PEAK
+                elif len(price_list) == 3:
+                    price_dict[price_list[0]] = PriceType.OFFPEAK
+                    price_dict[price_list[1]] = PriceType.STANDARD
+                    price_dict[price_list[2]] = PriceType.PEAK
+                # Then reset the price list and start for the new date
+                price_list = []
+                if entry.value_inc_vat not in price_list:
+                    if price_dict.get(entry.value_inc_vat) is None:
+                        price_list.append(entry.value_inc_vat)
+                prev_date = current_date
         return price_dict
 
     def get_import_prices(self) -> dict:

@@ -1,8 +1,9 @@
 """Dataclass definitions which describe the Octopus API."""
-from datetime import datetime, timedelta
 from dataclasses import dataclass, field
-from typing import List
+from datetime import datetime, timedelta
 from enum import Enum
+from typing import List
+
 import dateutil.parser
 
 
@@ -75,12 +76,8 @@ class APIArgs(Enum):
     EXPORT_SERIAL_NUMBER = "export_serial_number"
     ELECTRICITY_SERIAL_NUMBER = "electricity_serial_number"
     GAS_SERIAL_NUMBER = "gas_serial_number"
-    GAS_PRODUCT_CODE = "gas_product_code"
-    GAS_TARIFF_CODE = "gas_tariff_code"
     PRODUCT_CODE = "product_code"
     TARIFF_CODE = "tariff_code"
-    # EXPORT_PRODUCT_CODE = "export_product_code"
-    # EXPORT_TARIFF_CODE = "export_tariff_code"
 
 
 @dataclass
@@ -94,12 +91,8 @@ class apiargs:
     export_serial_number: str = None
     electricity_serial_number: str = None
     gas_serial_number: str = None
-    gas_product_code: str = None
-    gas_tariff_code: str = None
     product_code: str = None
     tariff_code: str = None
-    # export_product_code: str = None
-    # export_tariff_code: str = None
 
 
 class APIParms(Enum):

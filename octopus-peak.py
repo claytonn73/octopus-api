@@ -88,7 +88,6 @@ async def main(reset):
             firstofmonth = datetime(lastmonth.year, lastmonth.month, 1).date()
             querydays = (lastmonth.date()-firstofmonth).days
             startday = (now.date()-firstofmonth).days
-            print(lastmonth, firstofmonth, querydays, startday)
             if reset is True:
                 querydays = 365
             if querydays > 0:
