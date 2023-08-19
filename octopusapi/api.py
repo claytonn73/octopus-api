@@ -132,24 +132,6 @@ class OctopusClient():
         self.logger.info(f"Grid supply point: {result.results[0].group_id}")
         return result.results[0].group_id
 
-    def test_api(self) -> None:
-        """Run a series of API calls to test the API."""
-        for api_name in self._api.apis:
-            self.logger.info("Testing API endpoint: %s", api_name)
-            self._api_args.product_code = self._api_args.import_product_code
-            self._api_args.tariff_code = self._api_args.import_tariff_code
-            # Get the enum for each endpoint
-            # api_object = self._api.apis[api_name]
-            # Call the api for the endpoint and log the response
-            results = self._call_api(api_name=api_name)
-            # self.logger.debug("Response: %s", results)
-            # self.logger.debug("Resuts: %s", results)
-            # Check that each section in the API response exists
-            # self._parse_result(api_object.response, results, api_object.response)
-            if api_name == "Products":
-                self._api_args.product_code = results.results[0].code
-                self._api_args.tariff_code = "E-1R-" + results.results[0].code + "-A"
-
     def set_period_from(self, start) -> None:
         """Set the from data for any queries using either a string or datetime object."""
         if isinstance(start, str):
@@ -207,19 +189,16 @@ class OctopusClient():
             for meter_point in property.gas_meter_points:
                 for meter in meter_point.meters:
                     self._api_args.gas_serial_number = meter.serial_number
-                    try:
-                        results = self._call_api(api_name="GasConsumption")
-                        # If we get any data back
-                        if results.count > 0:
-                            # If this is the first result then set the response equal to the results
-                            if not response:
-                                response = results
-                            # Otherwise append the results to the results
-                            else:
-                                response.results += results.results
-                                response.count += results.count
-                    except requests.exceptions.HTTPError:
-                        return None
+                    results = self._call_api(api_name="GasConsumption")
+                    # If we get any data back
+                    if results.count > 0:
+                        # If this is the first result then set the response equal to the results
+                        if not response:
+                            response = results
+                        # Otherwise append the results to the results
+                        else:
+                            response.results += results.results
+                            response.count += results.count
                 if response:
                     return response.results
                 else:
@@ -272,19 +251,16 @@ class OctopusClient():
                 if meter_point.is_export is False:
                     for meter in meter_point.meters:
                         self._api_args.electricity_serial_number = meter.serial_number
-                        try:
-                            results = self._call_api(api_name="ElectricityConsumption")
-                            # If we get any data back
-                            if results.count > 0:
-                                # If this is the first result then set the response equal to the results
-                                if not response:
-                                    response = results
-                                # Otherwise append the results to the results
-                                else:
-                                    response.results += results.results
-                                    response.count += results.count
-                        except requests.exceptions.HTTPError:
-                            return None
+                        results = self._call_api(api_name="ElectricityConsumption")
+                        # If we get any data back
+                        if results.count > 0:
+                            # If this is the first result then set the response equal to the results
+                            if not response:
+                                response = results
+                            # Otherwise append the results to the results
+                            else:
+                                response.results += results.results
+                                response.count += results.count
                     if response:
                         return response.results
                     else:
@@ -300,19 +276,16 @@ class OctopusClient():
                 if meter_point.is_export is True:
                     for meter in meter_point.meters:
                         self._api_args.electricity_serial_number = meter.serial_number
-                        try:
-                            results = self._call_api(api_name="ElectricityExport")
-                            # If we get any data back
-                            if results.count > 0:
-                                # If this is the first result then set the response equal to the results
-                                if not response:
-                                    response = results
-                                # Otherwise append the results to the results
-                                else:
-                                    response.results += results.results
-                                    response.count += results.count
-                        except requests.exceptions.HTTPError:
-                            return None
+                        results = self._call_api(api_name="ElectricityExport")
+                        # If we get any data back
+                        if results.count > 0:
+                            # If this is the first result then set the response equal to the results
+                            if not response:
+                                response = results
+                            # Otherwise append the results to the results
+                            else:
+                                response.results += results.results
+                                response.count += results.count
                     if response:
                         return response.results
                     else:
