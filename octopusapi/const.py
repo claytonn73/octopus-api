@@ -574,14 +574,14 @@ ElectricityNightUnitRates = Api(
     response=rates)
 
 GasStandingCharges = Api(
-    endpoint="v1/products/{gas_product_code}/gas-tariffs/{gas_tariff_code}/standing-charges",
-    arguments=[APIArgs.GAS_PRODUCT_CODE, APIArgs.GAS_TARIFF_CODE],
+    endpoint="v1/products/{product_code}/gas-tariffs/{tariff_code}/standing-charges",
+    arguments=[APIArgs.PRODUCT_CODE, APIArgs.TARIFF_CODE],
     parms=[APIParms.PERIOD_FROM, APIParms.PERIOD_TO, APIParms.PAGE_SIZE],
     response=rates)
 
 GasStandardUnitRates = Api(
-    endpoint="v1/products/{gas_product_code}/gas-tariffs/{gas_tariff_code}/standard-unit-rates",
-    arguments=[APIArgs.GAS_PRODUCT_CODE, APIArgs.GAS_TARIFF_CODE],
+    endpoint="v1/products/{product_code}/gas-tariffs/{tariff_code}/standard-unit-rates",
+    arguments=[APIArgs.PRODUCT_CODE, APIArgs.TARIFF_CODE],
     parms=[APIParms.PERIOD_FROM, APIParms.PERIOD_TO, APIParms.PAGE_SIZE],
     response=rates)
 

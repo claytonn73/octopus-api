@@ -237,7 +237,6 @@ class OctopusClient():
         """
         self._set_startend(ago, days)
         self._api_parms.group_by = None
-        # self.set_page_size(intervals)
         consumption = self.get_electricity_consumption(ago=ago, days=days)
         price_range = self.get_price_ranges()
         prices = self.get_import_prices()
@@ -260,10 +259,7 @@ class OctopusClient():
                 coststart = next(currentcost)
             if price_dict[coststart].valid_to >= entry.interval_end:
                 pricetype = price_range[price_dict[coststart].value_inc_vat].value
-                if usage[date].get(pricetype) is None:
-                    usage[date][pricetype] = entry.consumption
-                else:
-                    usage[date][pricetype] += entry.consumption
+                usage[date][pricetype] = usage[date].setdefault(pricetype, 0) + entry.consumption
         return usage
 
     def get_electricity_consumption(self, intervals=48, ago: int = 7, days: int = 7) -> dict:
@@ -347,12 +343,8 @@ class OctopusClient():
                 coststart = next(currentcost)
             day = interval_start.date()
             # Then multiply the consumption by the rate to get the cost
-            if day in cost:
-                cost[day] += round(round(consumption[interval_start].consumption, 2)
-                                   * rates[coststart], 3)
-            else:
-                cost[day] = round(round(consumption[interval_start].consumption, 2)
-                                  * rates[coststart], 3)
+            cost[day] = cost.setdefault(day, 0) + round(round(consumption[interval_start].consumption, 2)
+                                                        * rates[coststart], 3)
 
         return cost
 
@@ -378,12 +370,8 @@ class OctopusClient():
             while interval_start <= coststart:
                 coststart = next(currentcost)
             day: date = interval_start.date()
-            if day in gain:
-                gain[day] += round(round(export[interval_start].consumption, 2)
-                                   * rates[coststart], 3)
-            else:
-                gain[day] = round(round(export[interval_start].consumption, 2)
-                                  * rates[coststart], 3)
+            gain[day] = gain.setdefault(day, 0) + round(round(export[interval_start].consumption, 2)
+                                                        * rates[coststart], 3)
         return gain
 
     def get_import_product(self) -> dict:
