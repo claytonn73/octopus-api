@@ -1,10 +1,11 @@
 """Dataclass definitions which describe the Octopus API."""
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import List
+from typing import List, get_origin
 
 import dateutil.parser
+from requests.auth import HTTPBasicAuth
 
 
 class RegionID(Enum):
@@ -55,7 +56,7 @@ class Group(Enum):
     QUARTER = "quarter"
 
 
-class Constants(Enum):
+class APIConstants(Enum):
     VALID_FROM = "valid_from"
     VALID_TO = "valid_to"
     RESULTS = "results"
@@ -133,10 +134,38 @@ class apiparms:
 
 
 @dataclass
-class meterpoint:
-    gsp: str
-    mpan: str
-    profile_class: str
+class Api:
+    """Dataclass describing Octopus API endpoints and the data they return."""
+    response: dataclass
+    type: str = "get"
+    auth: bool = False
+    endpoint: str = ""
+    arguments: list = field(default_factory=list)
+    parms: list = field(default_factory=list)
+
+
+@dataclass
+class baseclass:
+    """This dataclass provides the post_init code to handle the nested dataclasses
+    and formatting of datetime entries"""
+
+    def __post_init__(self):
+        for entry in fields(self):
+            # If the entry type is datetime then convert it from a string to a datetime object
+            if entry.type == datetime:
+                if getattr(self, entry.name) is not None:
+                    setattr(self, entry.name, dateutil.parser.parse(getattr(self, entry.name)))
+            # If the entry type is a dataclass then parse the entry into the dataclass
+            if is_dataclass(entry.type):
+                # Handle cases where the entry might not exist
+                if getattr(self, entry.name) is not None:
+                    setattr(self, entry.name, entry.type(**(getattr(self, entry.name))))
+            # If the entry type is a list
+            if get_origin(entry.type) == list:
+                # If the type of the list entry is a dataclass then parse each entry of the list into the dataclass
+                if is_dataclass(entry.type.__args__[0]):
+                    for index, data in enumerate(getattr(self, entry.name)):
+                        getattr(self, entry.name)[index] = entry.type.__args__[0](**(getattr(self, entry.name)[index]))
 
 
 @dataclass
@@ -147,14 +176,9 @@ class register:
 
 
 @dataclass
-class electricity_meter:
+class electricity_meter(baseclass):
     serial_number: str
     registers: List[register]
-
-    def __post_init__(self):
-        for index, entry in enumerate(self.registers):
-            if isinstance(entry, dict):
-                self.registers[index] = register(**self.registers[index])
 
 
 @dataclass
@@ -163,20 +187,14 @@ class gas_meter:
 
 
 @dataclass
-class agreement:
+class agreement(baseclass):
     tariff_code: str
     valid_from: datetime
     valid_to: datetime
 
-    def __post_init__(self):
-        if self.valid_from is not None:
-            self.valid_from = dateutil.parser.parse(self.valid_from)
-        if self.valid_to is not None:
-            self.valid_to = dateutil.parser.parse(self.valid_to)
-
 
 @dataclass
-class electricity_meter_point:
+class electricity_meter_point(baseclass):
     mpan: str
     profile_class: int
     meters: List[electricity_meter]
@@ -186,33 +204,17 @@ class electricity_meter_point:
     consumption_night: int = 0
     consumption_standard: int = 0
 
-    def __post_init__(self):
-        for index, entry in enumerate(self.meters):
-            if isinstance(entry, dict):
-                self.meters[index] = electricity_meter(**self.meters[index])
-        for index, entry in enumerate(self.agreements):
-            if isinstance(entry, dict):
-                self.agreements[index] = agreement(**self.agreements[index])
-
 
 @dataclass
-class gas_meter_point:
+class gas_meter_point(baseclass):
     mprn: str
     consumption_standard: int
     meters: List[gas_meter]
     agreements: List[agreement]
 
-    def __post_init__(self):
-        for index, entry in enumerate(self.meters):
-            if isinstance(entry, dict):
-                self.meters[index] = gas_meter(**self.meters[index])
-        for index, entry in enumerate(self.agreements):
-            if isinstance(entry, dict):
-                self.agreements[index] = agreement(**self.agreements[index])
-
 
 @dataclass
-class property:
+class property(baseclass):
     id: int
     moved_in_at: datetime
     moved_out_at: datetime
@@ -225,67 +227,33 @@ class property:
     electricity_meter_points: List[electricity_meter_point] = field(default_factory=list)
     gas_meter_points: List[gas_meter_point] = field(default_factory=list)
 
-    def __post_init__(self):
-        for index, entry in enumerate(self.electricity_meter_points):
-            if isinstance(entry, dict):
-                self.electricity_meter_points[index] = electricity_meter_point(**self.electricity_meter_points[index])
-        for index, entry in enumerate(self.gas_meter_points):
-            if isinstance(entry, dict):
-                self.gas_meter_points[index] = gas_meter_point(**self.gas_meter_points[index])
-        if self.moved_in_at is not None:
-            self.moved_in_at = dateutil.parser.parse(self.moved_in_at)
-        if self.moved_out_at is not None:
-            self.moved_out_at = dateutil.parser.parse(self.moved_out_at)
-
 
 @dataclass
-class account:
+class account(baseclass):
     number: str = ""
     properties: List[property] = field(default_factory=list)
     # regionid is not part of API response but is added with separate query
     regionid: str = ""
 
-    def __post_init__(self):
-        for index, entry in enumerate(self.properties):
-            if isinstance(entry, dict):
-                self.properties[index] = property(**self.properties[index])
+
+Account = Api(auth=True,
+              endpoint="v1/accounts/{account}",
+              arguments=[APIArgs.ACCOUNT],
+              response=account)
 
 
 @dataclass
-class usagegroup:
-    date: datetime.date
-    consumption: float = 0
-    pricerange: PriceType = PriceType.STANDARD
-
-
-@dataclass
-class groupedusage:
-    date: datetime.date
-    usage: list[usagegroup] = field(default_factory=list)
-
-
-@dataclass
-class usagedata:
-    consumption: float
-    interval_start: datetime
-    interval_end: datetime
-
-    def __post_init__(self):
-        self.interval_start = dateutil.parser.parse(self.interval_start)
-        self.interval_end = dateutil.parser.parse(self.interval_end)
-
-
-@dataclass
-class usage:
+class supplypoint(baseclass):
+    code: str
     count: int
     next: str
     previous: str
-    results: List[usagedata]
+    results: List[RegionID]
 
-    def __post_init__(self):
-        for index, entry in enumerate(self.results):
-            if isinstance(entry, dict):
-                self.results[index] = usagedata(**self.results[index])
+
+SupplyPoints = Api(endpoint="v1/industry/grid-supply-points",
+                   parms=[APIParms.POSTCODE],
+                   response=supplypoint)
 
 
 @dataclass
@@ -296,7 +264,7 @@ class link:
 
 
 @dataclass
-class productsdata:
+class productsdata(baseclass):
     code: str
     direction: str
     full_name: str
@@ -314,68 +282,23 @@ class productsdata:
     is_business: bool = False
     is_restricted: bool = False
 
-    def __post_init__(self):
-        for index, entry in enumerate(self.links):
-            if isinstance(entry, dict):
-                self.links[index] = link(**self.links[index])
-        if self.available_from is not None:
-            self.available_from = dateutil.parser.parse(self.available_from)
-        if self.available_to is not None:
-            self.available_to = dateutil.parser.parse(self.available_to)
-
 
 @dataclass
-class products:
+class products(baseclass):
     count: int
     next: str
     previous: str
     results: List[productsdata]
 
-    def __post_init__(self):
-        for index, entry in enumerate(self.results):
-            if isinstance(entry, dict):
-                self.results[index] = productsdata(**self.results[index])
+
+Products = Api(endpoint="v1/products",
+               parms=[APIParms.IS_PREPAY, APIParms.IS_GREEN, APIParms.IS_TRACKER,
+                      APIParms.IS_BUSINESS, APIParms.AVAILABLE_AT, APIParms.PAGE],
+               response=products)
 
 
 @dataclass
-class supplypoint:
-    code: str
-    count: int
-    next: str
-    previous: str
-    results: List[str]
-
-
-@dataclass(order=True)
-class rate:
-    value_exc_vat: float
-    value_inc_vat: float
-    valid_from: datetime
-    valid_to: datetime
-    payment_method: str = None
-
-    def __post_init__(self):
-        if self.valid_from is not None:
-            self.valid_from = dateutil.parser.parse(self.valid_from)
-        if self.valid_to is not None:
-            self.valid_to = dateutil.parser.parse(self.valid_to)
-
-
-@dataclass
-class rates:
-    count: int
-    next: str
-    previous: str
-    results: List[rate]
-
-    def __post_init__(self):
-        for index, entry in enumerate(self.results):
-            if isinstance(entry, dict):
-                self.results[index] = rate(**self.results[index])
-
-
-@dataclass
-class tariff:
+class tariff(baseclass):
     code: str
     standard_unit_rate_exc_vat: float
     standard_unit_rate_inc_vat: float
@@ -389,11 +312,6 @@ class tariff:
     exit_fees_inc_vat: float
     exit_fees_type: str
     links: List[link]
-
-    def __post_init__(self):
-        for index, entry in enumerate(self.links):
-            if isinstance(entry, dict):
-                self.links[index] = link(**self.links[index])
 
 
 @dataclass
@@ -414,31 +332,17 @@ class rate_cost:
 
 
 @dataclass
-class quote_type:
+class quote_type(baseclass):
     electricity_single_rate: rate_cost
     electricity_dual_rate: rate_cost = None
     dual_fuel_single_rate: rate_cost = None
     dual_fuel_dual_rate: rate_cost = None
 
-    def __post_init__(self):
-        self.electricity_single_rate = rate_cost(**self.electricity_single_rate)
-        if self.electricity_dual_rate is not None:
-            self.electricity_dual_rate = rate_cost(**self.electricity_dual_rate)
-        if self.dual_fuel_single_rate is not None:
-            self.dual_fuel_single_rate = rate_cost(**self.dual_fuel_single_rate)
-        if self.dual_fuel_dual_rate is not None:
-            self.dual_fuel_dual_rate = rate_cost(**self.dual_fuel_dual_rate)
-
 
 @dataclass
-class sample_quote:
+class sample_quote(baseclass):
     direct_debit_monthly: quote_type
     direct_debit_quarterly: quote_type = None
-
-    def __post_init__(self):
-        self.direct_debit_monthly = quote_type(**self.direct_debit_monthly)
-        if self.direct_debit_quarterly is not None:
-            self.direct_debit_quarterly = quote_type(**self.direct_debit_quarterly)
 
 
 @dataclass
@@ -450,25 +354,15 @@ class rate_type:
 
 
 @dataclass
-class sample_consumption:
+class sample_consumption_data(baseclass):
     electricity_single_rate: rate_type = None
     electricity_dual_rate: rate_type = None
     dual_fuel_single_rate: rate_type = None
     dual_fuel_dual_rate: rate_type = None
 
-    def __post_init__(self):
-        if self.electricity_single_rate is not None:
-            self.electricity_single_rate = rate_type(**self.electricity_single_rate)
-        if self.electricity_dual_rate is not None:
-            self.electricity_dual_rate = rate_type(**self.electricity_dual_rate)
-        if self.dual_fuel_single_rate is not None:
-            self.dual_fuel_single_rate = rate_type(**self.dual_fuel_single_rate)
-        if self.dual_fuel_dual_rate is not None:
-            self.dual_fuel_dual_rate = rate_type(**self.dual_fuel_dual_rate)
-
 
 @dataclass
-class product:
+class product(baseclass):
     code: str
     full_name: str
     display_name: str
@@ -488,66 +382,44 @@ class product:
     dual_register_electricity_tariffs: dict
     single_register_gas_tariffs: dict
     sample_quotes: dict
-    sample_consumption: dict
+    sample_consumption: sample_consumption_data
     links: List[link]
 
-    def __post_init__(self):
-        for index, entry in enumerate(self.links):
-            if isinstance(entry, dict):
-                self.links[index] = link(**self.links[index])
-        for index, entry in enumerate(self.single_register_electricity_tariffs):
-            self.single_register_electricity_tariffs[entry] = tariff_type(**self.single_register_electricity_tariffs[entry]) # noqa
-        for index, entry in enumerate(self.dual_register_electricity_tariffs):
-            self.dual_register_electricity_tariffs[entry] = tariff_type(**self.dual_register_electricity_tariffs[entry])
-        for index, entry in enumerate(self.single_register_gas_tariffs):
-            self.single_register_gas_tariffs[entry] = tariff_type(**self.single_register_gas_tariffs[entry])
-        for index, entry in enumerate(self.sample_quotes):
-            self.sample_quotes[entry] = sample_quote(**self.sample_quotes[entry])
-        self.sample_consumption = sample_consumption(**self.sample_consumption)
-        for index, entry in enumerate(self.links):
-            if isinstance(entry, dict):
-                self.links[index] = link(**self.links[index])
-        if self.available_from is not None:
-            self.available_from = dateutil.parser.parse(self.available_from)
-        if self.available_to is not None:
-            self.available_to = dateutil.parser.parse(self.available_to)
-        if self.tariffs_active_at is not None:
-            self.tariffs_active_at = dateutil.parser.parse(self.tariffs_active_at)
-
-
-@dataclass
-class Api:
-    """Dataclass describing Octopus API endpoints and the data they return."""
-    response: dataclass
-    type: str = "get"
-    auth: bool = False
-    endpoint: str = ""
-    arguments: list = field(default_factory=list)
-    parms: list = field(default_factory=list)
-
-
-Account = Api(auth=True,
-              endpoint="v1/accounts/{account}",
-              arguments=[APIArgs.ACCOUNT],
-              response=account)
-
-Products = Api(endpoint="v1/products",
-               parms=[APIParms.IS_PREPAY, APIParms.IS_GREEN, APIParms.IS_TRACKER,
-                      APIParms.IS_BUSINESS, APIParms.AVAILABLE_AT, APIParms.PAGE],
-               response=products)
 
 Product = Api(endpoint="v1/products/{product_code}",
               arguments=[APIArgs.PRODUCT_CODE],
               parms=[APIParms.TARIFFS_ACTIVE_AT],
               response=product)
 
-SupplyPoints = Api(endpoint="v1/industry/grid-supply-points",
-                   parms=[APIParms.POSTCODE],
-                   response=supplypoint)
+
+@dataclass
+class meterpoint:
+    gsp: str
+    mpan: str
+    profile_class: str
+
 
 ElectricityMeterPoints = Api(endpoint="v1/electricity-meter-points/{mpan}",
                              arguments=[APIArgs.MPAN],
                              response=meterpoint)
+
+
+@dataclass(order=True)
+class rate(baseclass):
+    value_exc_vat: float
+    value_inc_vat: float
+    valid_from: datetime
+    valid_to: datetime
+    payment_method: str = None
+
+
+@dataclass
+class rates(baseclass):
+    count: int
+    next: str
+    previous: str
+    results: List[rate]
+
 
 ElectricityStandingCharges = Api(
     endpoint="v1/products/{product_code}/electricity-tariffs/{tariff_code}/standing-charges",
@@ -585,6 +457,22 @@ GasStandardUnitRates = Api(
     parms=[APIParms.PERIOD_FROM, APIParms.PERIOD_TO, APIParms.PAGE_SIZE],
     response=rates)
 
+
+@dataclass
+class usagedata(baseclass):
+    consumption: float
+    interval_start: datetime
+    interval_end: datetime
+
+
+@dataclass
+class usage(baseclass):
+    count: int
+    next: str
+    previous: str
+    results: List[usagedata]
+
+
 GasConsumption = Api(
     auth=True,
     endpoint="v1/gas-meter-points/{mprn}/meters/{gas_serial_number}/consumption",
@@ -602,48 +490,71 @@ ElectricityConsumption = Api(
 
 ElectricityExport = Api(
     auth=True,
-    endpoint="v1/electricity-meter-points/{export_mpan}/meters/{electricity_serial_number}/consumption",
-    arguments=[APIArgs.EXPORT_MPAN, APIArgs.ELECTRICITY_SERIAL_NUMBER],
+    endpoint="v1/electricity-meter-points/{export_mpan}/meters/{export_serial_number}/consumption",
+    arguments=[APIArgs.EXPORT_MPAN, APIArgs.EXPORT_SERIAL_NUMBER],
     parms=[APIParms.PAGE_SIZE, APIParms.PERIOD_FROM, APIParms.PERIOD_TO, APIParms.ORDER_BY, APIParms.GROUP_BY],
     response=usage)
+
+
+@dataclass
+class usagegroup(baseclass):
+    date: datetime.date
+    consumption: float = 0
+    pricerange: PriceType = PriceType.STANDARD
+
+
+@dataclass
+class groupedusage(baseclass):
+    date: datetime.date
+    usage: list[usagegroup] = field(default_factory=list)
 
 
 @dataclass
 class RESTClient:
     url: str
     auth: str
-    apis: dict[str, Api]
-    constants: dict[str, str]
+    apilist: Enum
+    arguments: APIArgs
+    parameters: APIParms
+    constants: Enum
 
 
-# class Octopus(Enum):
-#    URL = "https://api.octopus.energy"
-#    AUTH = "HTTPBasicAuth"
-#    ACCOUNT = Account
+class APIList(Enum):
+    """This enum lists all the defined API endpoints, making it easy to reference them.
+    The Enum value is the instance of the Endpoint class that describes the endpoint.
+    """
+    Account = Account
+    GasConsumption = GasConsumption
+    ElectricityConsumption = ElectricityConsumption
+    ElectricityExport = ElectricityExport
+    SupplyPoints = SupplyPoints
+    ElectricityMeterPoints = ElectricityMeterPoints
+    Product = Product
+    Products = Products
+    ElectricityStandingCharges = ElectricityStandingCharges
+    ElectricityStandardUnitRates = ElectricityStandardUnitRates
+    ElectricityDayUnitRates = ElectricityDayUnitRates
+    ElectricityNightUnitRates = ElectricityNightUnitRates
+    GasStandingCharges = GasStandingCharges
+    GasStandardUnitRates = GasStandardUnitRates
+
+
+class Constants(Enum):
+    """This enum lists all the defined constants, making it easy to reference them."""
+    RegionID = RegionID
+    Direction = Direction
+    PriceType = PriceType
+    Rate = Rate
+    Order = Order
+    Group = Group
+    APIConstants = APIConstants
 
 
 Octopus = RESTClient(
     url="https://api.octopus.energy",
-    auth="HTTPBasicAuth",
-    apis={
-        "Account": Account,
-        "GasConsumption": GasConsumption,
-        "ElectricityConsumption": ElectricityConsumption,
-        "ElectricityExport": ElectricityExport,
-        "SupplyPoints": SupplyPoints,
-        "ElectricityMeterPoints": ElectricityMeterPoints,
-        "Product": Product,
-        "Products": Products,
-        "ElectricityStandingCharges": ElectricityStandingCharges,
-        "ElectricityStandardUnitRates": ElectricityStandardUnitRates,
-        "ElectricityDayUnitRates": ElectricityDayUnitRates,
-        "ElectricityNightUnitRates": ElectricityNightUnitRates,
-        "GasStandingCharges": GasStandingCharges,
-        "GasStandardUnitRates": GasStandardUnitRates,
-    },
-    constants={
-        "RegionID": RegionID,
-        "Direction": Direction,
-        "Rate": Rate,
-    }
+    auth=HTTPBasicAuth,
+    apilist=APIList,
+    arguments=apiargs(),
+    parameters=apiparms(),
+    constants=Constants
 )

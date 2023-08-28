@@ -1,17 +1,17 @@
 """Contains the Octopus API class and its methods."""
 
-import logging
 import json
-from datetime import datetime, date, timedelta, timezone
-from dataclasses import asdict # noqa F401
+import logging
+from dataclasses import asdict  # noqa F401
+from datetime import date, datetime, timedelta, timezone
 
 import dateutil.parser
 import requests
 from requests.auth import HTTPBasicAuth
 
-from octopusapi.const import Octopus, Constants, Order, RegionID, Group, PriceType # noqa F401
-
 import octopusapi.const
+from octopusapi.const import (APIConstants, Group, Octopus, Order, APIList, # noqa F401
+                              PriceType, RegionID)
 
 # Only export the Octopus Client
 __all__ = ["OctopusClient"]
@@ -91,13 +91,10 @@ class OctopusClient():
                 self.logger.info(f"tariff is: {agreement.tariff_code}")
                 self._api_args.tariff_code = agreement.tariff_code
                 self._api_args.product_code = agreement.tariff_code[5:-2]
-                return
-        self._api_args.tariff = None
-        self._api_args.product = None
 
     def _get_account_information(self) -> None:
         """Populate information required for other API calls when provided an account ID and API key."""
-        self._account_info = self._call_api(api_name="Account")
+        self._account_info = self._call_api(api_name=APIList.Account.value)
         # Get the information for the first property in the account only
         for property in self._account_info.properties:
             for meter_points in property.electricity_meter_points:
@@ -122,13 +119,13 @@ class OctopusClient():
 
     def _validate_mpan(self) -> dict:
         """Query the provided meter point to get the grid supply point."""
-        result = self._call_api(api_name="ElectricityMeterPoints")
+        result = self._call_api(api_name=APIList.ElectricityMeterPoints.value)
         self.logger.debug(f'Grid supply point: {result.gsp}')
         return result.gsp
 
     def _check_postcode(self) -> str:
         """Return a group id for a particular postcode."""
-        result = self._call_api(api_name="SupplyPoints")
+        result = self._call_api(api_name=APIList.SupplyPoints.value)
         self.logger.info(f"Grid supply point: {result.results[0].group_id}")
         return result.results[0].group_id
 
@@ -189,7 +186,7 @@ class OctopusClient():
             for meter_point in property.gas_meter_points:
                 for meter in meter_point.meters:
                     self._api_args.gas_serial_number = meter.serial_number
-                    results = self._call_api(api_name="GasConsumption")
+                    results = self._call_api(api_name=APIList.GasConsumption.value)
                     # If we get any data back
                     if results.count > 0:
                         # If this is the first result then set the response equal to the results
@@ -217,8 +214,8 @@ class OctopusClient():
         self._set_startend(ago, days)
         self._api_parms.group_by = None
         consumption = self.get_electricity_consumption(ago=ago, days=days)
-        price_range = self.get_price_ranges()
-        prices = self.get_import_prices()
+        price_range = self.price_ranges
+        prices = self.import_prices
         price_dict = {}
         usage = {}
         for price in prices:
@@ -238,7 +235,7 @@ class OctopusClient():
                 coststart = next(currentcost)
             if price_dict[coststart].valid_to >= entry.interval_end:
                 pricetype = price_range[price_dict[coststart].value_inc_vat].value
-                usage[date][pricetype] = usage[date].setdefault(pricetype, 0) + entry.consumption
+                usage[date][pricetype] = round(usage[date].setdefault(pricetype, 0) + entry.consumption, 2)
         return usage
 
     def get_electricity_consumption(self, intervals=48, ago: int = 7, days: int = 7) -> dict:
@@ -251,7 +248,7 @@ class OctopusClient():
                 if meter_point.is_export is False:
                     for meter in meter_point.meters:
                         self._api_args.electricity_serial_number = meter.serial_number
-                        results = self._call_api(api_name="ElectricityConsumption")
+                        results = self._call_api(api_name=APIList.ElectricityConsumption.value)
                         # If we get any data back
                         if results.count > 0:
                             # If this is the first result then set the response equal to the results
@@ -266,7 +263,7 @@ class OctopusClient():
                     else:
                         return None
 
-    def get_electricity_export(self, intervals=48, ago=7, days=7) -> dict:
+    def get_electricity_export(self, intervals=48, ago: int = 7, days: int = 7) -> dict:
         """Get electricity export information."""
         self._set_startend(ago, days)
         # self.set_page_size(intervals)
@@ -275,8 +272,8 @@ class OctopusClient():
             for meter_point in property.electricity_meter_points:
                 if meter_point.is_export is True:
                     for meter in meter_point.meters:
-                        self._api_args.electricity_serial_number = meter.serial_number
-                        results = self._call_api(api_name="ElectricityExport")
+                        self._api_args.export_serial_number = meter.serial_number
+                        results = self._call_api(api_name=APIList.ElectricityExport.value)
                         # If we get any data back
                         if results.count > 0:
                             # If this is the first result then set the response equal to the results
@@ -293,15 +290,15 @@ class OctopusClient():
 
     def calculate_electricity_cost(self, ago: int = 7) -> dict:
         """Calculate the total cost for electricity for a day."""
-        self.get_import_product()
+        self.import_product
         self._set_startend(ago, 30)
         # Get the unit rates and store the value for each interval
-        result = self._call_api(api_name="ElectricityStandardUnitRates")
+        result = self._call_api(api_name=APIList.ElectricityStandardUnitRates.value)
         rates = {}
         for entry in result.results:
             rates[entry.valid_from] = entry.value_inc_vat
         # Get the consumption values and store the values for each interval
-        self.get_import_product()
+        self.import_product
         result = self.get_electricity_consumption()
         consumption = {}
         for entry in result:
@@ -323,10 +320,10 @@ class OctopusClient():
 
     def calculate_electricity_gain(self, ago: int = 7) -> dict:
         """Calculate the total cost for electricity for a day."""
-        self.get_export_product()
+        self.export_product
         self._set_startend(ago, 30)
         # Get the unit rates and store the value for each interval
-        result = self._call_api(api_name="ElectricityStandardUnitRates")
+        result = self._call_api(api_name=APIList.ElectricityStandardUnitRates.value)
         rates = {}
         for entry in result.results:
             rates[entry.valid_from] = entry.value_inc_vat
@@ -347,7 +344,8 @@ class OctopusClient():
                                                         * rates[coststart], 3)
         return gain
 
-    def get_import_product(self) -> dict:
+    @property
+    def import_product(self) -> dict:
         """Returns the details for the electricity import product for the account
         deleting the regions that are not relevant for the account
         """
@@ -355,7 +353,7 @@ class OctopusClient():
             for meter_point in property.electricity_meter_points:
                 if meter_point.is_export is False:
                     self._set_tariff_code(meter_point.agreements)
-        data = self._call_api(api_name="Product")
+        data = self._call_api(api_name=APIList.Product.value)
         for entry in octopusapi.const.RegionID:
             if entry.name == self._account_info.regionid:
                 pass
@@ -368,7 +366,8 @@ class OctopusClient():
                     del data.sample_quotes[entry.name]
         return data
 
-    def get_export_product(self) -> dict:
+    @property
+    def export_product(self) -> dict:
         """Returns the details for the electricity export product for the account
         deleting the regions that are not relevant for the account
         """
@@ -376,7 +375,7 @@ class OctopusClient():
             for meter_point in property.electricity_meter_points:
                 if meter_point.is_export is True:
                     self._set_tariff_code(meter_point.agreements)
-        data = self._call_api(api_name="Product")
+        data = self._call_api(api_name=APIList.Product.value)
         for entry in octopusapi.const.RegionID:
             if entry.name == self._account_info.regionid:
                 pass
@@ -389,14 +388,15 @@ class OctopusClient():
                     del data.sample_quotes[entry.name]
         return data
 
-    def get_gas_product(self) -> dict:
+    @property
+    def gas_product(self) -> dict:
         """Returns the details for the gas product for the account
         deleting the regions that are not relevant for the account
         """
         for property in self._account_info.properties:
             for meter_point in property.gas_meter_points:
                 self._set_tariff_code(meter_point.agreements)
-        data = self._call_api(api_name="Product")
+        data = self._call_api(api_name=APIList.Product.value)
         for entry in octopusapi.const.RegionID:
             if entry.name == self._account_info.regionid:
                 pass
@@ -409,10 +409,11 @@ class OctopusClient():
                     del data.sample_quotes[entry.name]
         return data
 
-    def get_price_ranges(self) -> dict:
+    @property
+    def price_ranges(self) -> dict:
         """Return a dict of prices broken down into peak/offpeak and standard."""
-        self.get_import_product()
-        data = self._call_api(api_name="ElectricityStandardUnitRates")
+        self.import_product
+        data = self._call_api(api_name=APIList.ElectricityStandardUnitRates.value)
         price_list = []
         price_dict = {}
         prev_date = datetime.now().date()
@@ -444,17 +445,18 @@ class OctopusClient():
                 prev_date = current_date
         return price_dict
 
-    def get_import_prices(self) -> dict:
+    @property
+    def import_prices(self) -> dict:
         """Return a list of the prices over time."""
-        self.get_import_product()
-        data = self._call_api(api_name="ElectricityStandardUnitRates")
+        self.import_product
+        data = self._call_api(api_name=APIList.ElectricityStandardUnitRates.value)
         return data.results
 
     @property
     def electricity_standing_charge(self) -> float:
         """Get the current standing charge."""
-        self.get_import_product()
-        data = self._call_api(api_name="ElectricityStandingCharges")
+        self.import_product
+        data = self._call_api(api_name=APIList.ElectricityStandingCharges.value)
         for entry in data.results:
             if self._is_current(entry) is True:
                 return entry.value_inc_vat
@@ -463,8 +465,8 @@ class OctopusClient():
     @property
     def current_export_price(self) -> float:
         """Get the current electricity export price."""
-        self.get_export_product()
-        data = self._call_api(api_name="ElectricityStandardUnitRates")
+        self.export_product
+        data = self._call_api(api_name=APIList.ElectricityStandardUnitRates.value)
         for entry in data.results:
             if self._is_current(entry) is True:
                 return entry.value_inc_vat
@@ -473,8 +475,8 @@ class OctopusClient():
     @property
     def current_import_price(self) -> float:
         """Get the current electricity import price."""
-        self.get_import_product()
-        data = self._call_api(api_name="ElectricityStandardUnitRates")
+        self.import_product
+        data = self._call_api(api_name=APIList.ElectricityStandardUnitRates.value)
         for entry in data.results:
             if self._is_current(entry) is True:
                 return entry.value_inc_vat
@@ -483,8 +485,8 @@ class OctopusClient():
     @property
     def current_gas_price(self) -> float:
         """Get the current gas price."""
-        self.get_gas_product()
-        data = octopusapi.const.rates(**self._call_api(api_name="GasStandardUnitRates"))
+        self.gas_product
+        data = octopusapi.const.rates(**self._call_api(api_name=APIList.GasStandardUnitRates.value))
         for entry in data.results:
             if self._is_current(entry) is True:
                 return entry.value_inc_vat
@@ -493,16 +495,16 @@ class OctopusClient():
     @property
     def gas_standing_charge(self) -> float:
         """Get the current gas standing charge ."""
-        self.get_gas_product()
-        data = octopusapi.const.rates(**self._call_api(api_name="GasStandingCharges"))
+        self.gas_product
+        data = octopusapi.const.rates(**self._call_api(api_name=APIList.GasStandingCharges.value))
         for entry in data.results:
             if self._is_current(entry) is True:
                 return entry.value_inc_vat
         return None
 
-    def _call_api(self, api_name: str = "Products") -> dict:
+    def _call_api(self, api_name: str = APIList.Products.value) -> dict:
         """Initialise the arguments required to call one of the REST APIs and then call it returning the results."""
-        api_object = self._api.apis[api_name]
+        api_object = api_name
         # If the API request requires a key and we do not have one
         if (api_object.auth is True) & (self._user is None):
             raise APIKeyError(api_name)
@@ -571,29 +573,29 @@ class OctopusClient():
     def _is_current(self, entry: dict) -> bool:
         """Determine if an entry is current based on the valid_from and valid_to fields."""
         result = True
-        if getattr(entry, Constants.VALID_FROM.value) is not None:
-            from_date = getattr(entry, Constants.VALID_FROM.value)
+        if getattr(entry, APIConstants.VALID_FROM.value) is not None:
+            from_date = getattr(entry, APIConstants.VALID_FROM.value)
             if from_date > datetime.now(from_date.tzinfo):
                 result = False
-        if getattr(entry, Constants.VALID_TO.value) is not None:
-            to_date = getattr(entry, Constants.VALID_TO.value)
+        if getattr(entry, APIConstants.VALID_TO.value) is not None:
+            to_date = getattr(entry, APIConstants.VALID_TO.value)
             if to_date < datetime.now(from_date.tzinfo):
                 result = False
-        self.logger.debug(f'From date: {getattr(entry, Constants.VALID_FROM.value)} '
-                          f'To date: {getattr(entry, Constants.VALID_TO.value)} Result: {result}')
+        self.logger.debug(f'From date: {getattr(entry, APIConstants.VALID_FROM.value)} '
+                          f'To date: {getattr(entry, APIConstants.VALID_TO.value)} Result: {result}')
         return result
 
     def _is_between(self, entry: dict, time: datetime) -> bool:
         """Determine if an entry is the correct one based on the valid_from and valid_to fields."""
         result = True
-        if entry[Constants.VALID_FROM.value] is not None:
+        if entry[APIConstants.VALID_FROM.value] is not None:
             from_date = dateutil.parser.parse(entry[entry.valid_from.name])
             if from_date > time:
                 result = False
-        if entry[Constants.VALID_TO.value] is not None:
-            to_date = dateutil.parser.parse(entry[Constants.VALID_TO.value])
+        if entry[APIConstants.VALID_TO.value] is not None:
+            to_date = dateutil.parser.parse(entry[APIConstants.VALID_TO.value])
             if to_date < time:
                 result = False
-        self.logger.debug(f'From date: {entry[Constants.VALID_FROM.value]} '
-                          f'To date: {entry[Constants.VALID_TO.value]} Time: {time} Result: {result}')
+        self.logger.debug(f'From date: {entry[APIConstants.VALID_FROM.value]} '
+                          f'To date: {entry[APIConstants.VALID_TO.value]} Time: {time} Result: {result}')
         return result
