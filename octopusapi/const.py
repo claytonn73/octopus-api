@@ -1,11 +1,11 @@
 """Dataclass definitions which describe the Octopus API."""
-from dataclasses import dataclass, field, fields, is_dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import List, get_origin
+from typing import List
 
-import dateutil.parser
 from requests.auth import HTTPBasicAuth
+from octopusapi.apiconstruct import baseclass, RESTClient, Endpoint
 
 
 class RegionID(Enum):
@@ -116,11 +116,12 @@ class APIParms(Enum):
 
 @dataclass
 class apiparms:
-    period_from: datetime = (datetime.now()-timedelta(days=1)).strftime('%Y-%m-%dT%H:%MZ')
+    period_from: datetime = (
+        datetime.now()-timedelta(days=1)).strftime('%Y-%m-%dT%H:%MZ')
     period_to: datetime = datetime.now().strftime('%Y-%m-%dT%H:%MZ')
-    page_size: int = 100
+    page_size: int = 9999
     order_by: str = Order.FORWARD.value
-    group_by: str = Group.DAY.value
+    group_by: str = None
     postcode: str = None
     tariffs_active_at: datetime = datetime.now().strftime('%Y-%m-%dT%H:%MZ')
     is_prepay: bool = False
@@ -131,41 +132,6 @@ class apiparms:
     available_at: datetime = datetime.now().strftime('%Y-%m-%dT%H:%MZ')
     page: int = 1
     account: str = None
-
-
-@dataclass
-class Api:
-    """Dataclass describing Octopus API endpoints and the data they return."""
-    response: dataclass
-    type: str = "get"
-    auth: bool = False
-    endpoint: str = ""
-    arguments: list = field(default_factory=list)
-    parms: list = field(default_factory=list)
-
-
-@dataclass
-class baseclass:
-    """This dataclass provides the post_init code to handle the nested dataclasses
-    and formatting of datetime entries"""
-
-    def __post_init__(self):
-        for entry in fields(self):
-            # If the entry type is datetime then convert it from a string to a datetime object
-            if entry.type == datetime:
-                if getattr(self, entry.name) is not None:
-                    setattr(self, entry.name, dateutil.parser.parse(getattr(self, entry.name)))
-            # If the entry type is a dataclass then parse the entry into the dataclass
-            if is_dataclass(entry.type):
-                # Handle cases where the entry might not exist
-                if getattr(self, entry.name) is not None:
-                    setattr(self, entry.name, entry.type(**(getattr(self, entry.name))))
-            # If the entry type is a list
-            if get_origin(entry.type) == list:
-                # If the type of the list entry is a dataclass then parse each entry of the list into the dataclass
-                if is_dataclass(entry.type.__args__[0]):
-                    for index, data in enumerate(getattr(self, entry.name)):
-                        getattr(self, entry.name)[index] = entry.type.__args__[0](**(getattr(self, entry.name)[index]))
 
 
 @dataclass
@@ -224,7 +190,8 @@ class property(baseclass):
     town: str
     county: str
     postcode: str
-    electricity_meter_points: List[electricity_meter_point] = field(default_factory=list)
+    electricity_meter_points: List[electricity_meter_point] = field(
+        default_factory=list)
     gas_meter_points: List[gas_meter_point] = field(default_factory=list)
 
 
@@ -236,10 +203,10 @@ class account(baseclass):
     regionid: str = ""
 
 
-Account = Api(auth=True,
-              endpoint="v1/accounts/{account}",
-              arguments=[APIArgs.ACCOUNT],
-              response=account)
+Account = Endpoint(auth=True,
+                   endpoint="v1/accounts/{account}",
+                   arguments=[APIArgs.ACCOUNT],
+                   response=account)
 
 
 @dataclass
@@ -251,9 +218,9 @@ class supplypoint(baseclass):
     results: List[RegionID]
 
 
-SupplyPoints = Api(endpoint="v1/industry/grid-supply-points",
-                   parms=[APIParms.POSTCODE],
-                   response=supplypoint)
+SupplyPoints = Endpoint(endpoint="v1/industry/grid-supply-points",
+                        parms=[APIParms.POSTCODE],
+                        response=supplypoint)
 
 
 @dataclass
@@ -291,17 +258,15 @@ class products(baseclass):
     results: List[productsdata]
 
 
-Products = Api(endpoint="v1/products",
-               parms=[APIParms.IS_PREPAY, APIParms.IS_GREEN, APIParms.IS_TRACKER,
-                      APIParms.IS_BUSINESS, APIParms.AVAILABLE_AT, APIParms.PAGE],
-               response=products)
+Products = Endpoint(endpoint="v1/products",
+                    parms=[APIParms.IS_PREPAY, APIParms.IS_GREEN, APIParms.IS_TRACKER,
+                           APIParms.IS_BUSINESS, APIParms.AVAILABLE_AT, APIParms.PAGE],
+                    response=products)
 
 
 @dataclass
 class tariff(baseclass):
     code: str
-    standard_unit_rate_exc_vat: float
-    standard_unit_rate_inc_vat: float
     standing_charge_exc_vat: float
     standing_charge_inc_vat: float
     online_discount_exc_vat: float
@@ -312,17 +277,19 @@ class tariff(baseclass):
     exit_fees_inc_vat: float
     exit_fees_type: str
     links: List[link]
+    day_unit_rate_exc_vat: float = 0
+    day_unit_rate_inc_vat: float = 0
+    night_unit_rate_exc_vat: float = 0
+    night_unit_rate_inc_vat: float = 0
+    standard_unit_rate_exc_vat: float = 0
+    standard_unit_rate_inc_vat: float = 0
 
 
 @dataclass
-class tariff_type:
+class tariff_type(baseclass):
     direct_debit_monthly: tariff = field(default_factory=dict)
     direct_debit_quarterly: tariff = field(default_factory=dict)
-
-    def __post_init__(self):
-        self.direct_debit_monthly = tariff(**self.direct_debit_monthly)
-        if self.direct_debit_quarterly != {}:
-            self.direct_debit_quarterly = tariff(**self.direct_debit_quarterly)
+    varying: tariff = field(default_factory=dict)
 
 
 @dataclass
@@ -333,7 +300,7 @@ class rate_cost:
 
 @dataclass
 class quote_type(baseclass):
-    electricity_single_rate: rate_cost
+    electricity_single_rate: rate_cost = None
     electricity_dual_rate: rate_cost = None
     dual_fuel_single_rate: rate_cost = None
     dual_fuel_dual_rate: rate_cost = None
@@ -341,8 +308,9 @@ class quote_type(baseclass):
 
 @dataclass
 class sample_quote(baseclass):
-    direct_debit_monthly: quote_type
+    direct_debit_monthly: quote_type = None
     direct_debit_quarterly: quote_type = None
+    varying: quote_type = None
 
 
 @dataclass
@@ -378,30 +346,30 @@ class product(baseclass):
     available_from: datetime
     available_to: datetime
     tariffs_active_at: datetime
-    single_register_electricity_tariffs: dict
-    dual_register_electricity_tariffs: dict
-    single_register_gas_tariffs: dict
-    sample_quotes: dict
+    single_register_electricity_tariffs: dict[RegionID, tariff_type]
+    dual_register_electricity_tariffs: dict[RegionID, tariff_type]
+    single_register_gas_tariffs: dict[RegionID, tariff_type]
+    sample_quotes: dict[RegionID, sample_quote]
     sample_consumption: sample_consumption_data
     links: List[link]
 
 
-Product = Api(endpoint="v1/products/{product_code}",
-              arguments=[APIArgs.PRODUCT_CODE],
-              parms=[APIParms.TARIFFS_ACTIVE_AT],
-              response=product)
+Product = Endpoint(endpoint="v1/products/{product_code}",
+                   arguments=[APIArgs.PRODUCT_CODE],
+                   parms=[APIParms.TARIFFS_ACTIVE_AT],
+                   response=product)
 
 
 @dataclass
-class meterpoint:
-    gsp: str
+class meterpoint(baseclass):
+    gsp: RegionID
     mpan: str
-    profile_class: str
+    profile_class: int
 
 
-ElectricityMeterPoints = Api(endpoint="v1/electricity-meter-points/{mpan}",
-                             arguments=[APIArgs.MPAN],
-                             response=meterpoint)
+ElectricityMeterPoints = Endpoint(endpoint="v1/electricity-meter-points/{mpan}",
+                                  arguments=[APIArgs.MPAN],
+                                  response=meterpoint)
 
 
 @dataclass(order=True)
@@ -421,37 +389,37 @@ class rates(baseclass):
     results: List[rate]
 
 
-ElectricityStandingCharges = Api(
+ElectricityStandingCharges = Endpoint(
     endpoint="v1/products/{product_code}/electricity-tariffs/{tariff_code}/standing-charges",
     arguments=[APIArgs.PRODUCT_CODE, APIArgs.TARIFF_CODE],
     parms=[APIParms.PERIOD_FROM, APIParms.PERIOD_TO, APIParms.PAGE_SIZE],
     response=rates)
 
-ElectricityStandardUnitRates = Api(
+ElectricityStandardUnitRates = Endpoint(
     endpoint="v1/products/{product_code}/electricity-tariffs/{tariff_code}/standard-unit-rates",
     arguments=[APIArgs.PRODUCT_CODE, APIArgs.TARIFF_CODE],
     parms=[APIParms.PERIOD_FROM, APIParms.PERIOD_TO, APIParms.PAGE_SIZE],
     response=rates)
 
-ElectricityDayUnitRates = Api(
+ElectricityDayUnitRates = Endpoint(
     endpoint="v1/products/{product_code}/electricity-tariffs/{tariff_code}/day-unit-rates",
     arguments=[APIArgs.PRODUCT_CODE, APIArgs.TARIFF_CODE],
     parms=[APIParms.PERIOD_FROM, APIParms.PERIOD_TO, APIParms.PAGE_SIZE],
     response=rates)
 
-ElectricityNightUnitRates = Api(
+ElectricityNightUnitRates = Endpoint(
     endpoint="v1/products/{product_code}/electricity-tariffs/{tariff_code}/night-unit-rates",
     arguments=[APIArgs.PRODUCT_CODE, APIArgs.TARIFF_CODE],
     parms=[APIParms.PERIOD_FROM, APIParms.PERIOD_TO, APIParms.PAGE_SIZE],
     response=rates)
 
-GasStandingCharges = Api(
+GasStandingCharges = Endpoint(
     endpoint="v1/products/{product_code}/gas-tariffs/{tariff_code}/standing-charges",
     arguments=[APIArgs.PRODUCT_CODE, APIArgs.TARIFF_CODE],
     parms=[APIParms.PERIOD_FROM, APIParms.PERIOD_TO, APIParms.PAGE_SIZE],
     response=rates)
 
-GasStandardUnitRates = Api(
+GasStandardUnitRates = Endpoint(
     endpoint="v1/products/{product_code}/gas-tariffs/{tariff_code}/standard-unit-rates",
     arguments=[APIArgs.PRODUCT_CODE, APIArgs.TARIFF_CODE],
     parms=[APIParms.PERIOD_FROM, APIParms.PERIOD_TO, APIParms.PAGE_SIZE],
@@ -473,26 +441,29 @@ class usage(baseclass):
     results: List[usagedata]
 
 
-GasConsumption = Api(
+GasConsumption = Endpoint(
     auth=True,
     endpoint="v1/gas-meter-points/{mprn}/meters/{gas_serial_number}/consumption",
     arguments=[APIArgs.MPRN, APIArgs.GAS_SERIAL_NUMBER],
-    parms=[APIParms.PAGE_SIZE, APIParms.PERIOD_FROM, APIParms.PERIOD_TO, APIParms.ORDER_BY, APIParms.GROUP_BY],
+    parms=[APIParms.PAGE_SIZE, APIParms.PERIOD_FROM,
+           APIParms.PERIOD_TO, APIParms.ORDER_BY, APIParms.GROUP_BY],
     response=usage)
 
 
-ElectricityConsumption = Api(
+ElectricityConsumption = Endpoint(
     auth=True,
     endpoint="v1/electricity-meter-points/{mpan}/meters/{electricity_serial_number}/consumption",
     arguments=[APIArgs.MPAN, APIArgs.ELECTRICITY_SERIAL_NUMBER],
-    parms=[APIParms.PAGE_SIZE, APIParms.PERIOD_FROM, APIParms.PERIOD_TO, APIParms.ORDER_BY, APIParms.GROUP_BY],
+    parms=[APIParms.PAGE_SIZE, APIParms.PERIOD_FROM,
+           APIParms.PERIOD_TO, APIParms.ORDER_BY, APIParms.GROUP_BY],
     response=usage)
 
-ElectricityExport = Api(
+ElectricityExport = Endpoint(
     auth=True,
     endpoint="v1/electricity-meter-points/{export_mpan}/meters/{export_serial_number}/consumption",
     arguments=[APIArgs.EXPORT_MPAN, APIArgs.EXPORT_SERIAL_NUMBER],
-    parms=[APIParms.PAGE_SIZE, APIParms.PERIOD_FROM, APIParms.PERIOD_TO, APIParms.ORDER_BY, APIParms.GROUP_BY],
+    parms=[APIParms.PAGE_SIZE, APIParms.PERIOD_FROM,
+           APIParms.PERIOD_TO, APIParms.ORDER_BY, APIParms.GROUP_BY],
     response=usage)
 
 
@@ -507,16 +478,6 @@ class usagegroup(baseclass):
 class groupedusage(baseclass):
     date: datetime.date
     usage: list[usagegroup] = field(default_factory=list)
-
-
-@dataclass
-class RESTClient:
-    url: str
-    auth: str
-    apilist: Enum
-    arguments: APIArgs
-    parameters: APIParms
-    constants: Enum
 
 
 class APIList(Enum):
@@ -548,6 +509,7 @@ class Constants(Enum):
     Order = Order
     Group = Group
     APIConstants = APIConstants
+    DateFormat = '%Y-%m-%dT%H:%MZ'
 
 
 Octopus = RESTClient(

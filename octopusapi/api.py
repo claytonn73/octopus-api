@@ -1,17 +1,17 @@
 """Contains the Octopus API class and its methods."""
 
-import json
 import logging
-from dataclasses import asdict  # noqa F401
+from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
+from typing import Callable
 
 import dateutil.parser
 import requests
+import ujson
 from requests.auth import HTTPBasicAuth
 
 import octopusapi.const
-from octopusapi.const import (APIConstants, Group, Octopus, Order, APIList, # noqa F401
-                              PriceType, RegionID)
+from octopusapi.const import APIConstants, APIList, Octopus, PriceType
 
 # Only export the Octopus Client
 __all__ = ["OctopusClient"]
@@ -24,7 +24,7 @@ class OctopusError(Exception):
 
 class APIKeyError(OctopusError):
     def __init__(self, product):
-        super().__init__("{} requires authorisation and no key provided.".format(product))
+        super().__init__(f"{product} requires authorisation and no key provided.")
 
 
 class OctopusClient():
@@ -52,25 +52,19 @@ class OctopusClient():
         # Octopus API uses the API key as user and accepts any value as the password
         self._user = apikey
         self._passwd = "anything"
-        # Initialise dataclasses for the arguments and parms for the API
-        self._api_args = octopusapi.const.apiargs()
-        self._api_parms = octopusapi.const.apiparms()
         # If an account number if provided then check for an API key and then get details
-        if account is not None:
-            if self._user is not None:
-                self._api_args.account = account
-                self._get_account_information()
-                # self_api_args.mpan = self._account_info.account.property.electricity_meter_point.mpan
-                self._account_info.regionid = self._validate_mpan()
-                self.logger.info(f'Grid Supply Region is {RegionID[self._account_info.regionid].value}')
-            else:
-                raise OctopusError("Account provided without API key.")
+        if account is not None and apikey is None:
+            raise OctopusError("Account provided without API key.")            
+        if self._user:
+            self._api.arguments.account = account
+            self._get_account_information()
+            self._account_info.regionid = self._validate_mpan()
+            self.logger.info(f'Grid Supply Region is {self._account_info.regionid.value}')               
         # If no account number then check for a postcode and if provided set the regionid
-        else:
-            if postcode is not None:
-                self._api_parms.postcode = postcode
-                self._account_info.regionid = self._check_postcode()
-                self.logger.info(f'Grid Supply Region is {RegionID[self._account_info.regionid].value}')
+        elif postcode:
+            self._api.parameters.postcode = postcode
+            self._account_info.regionid = self._check_postcode()
+            self.logger.info(f'Grid Supply Region is {self._account_info.regionid.value}')
 
     def __enter__(self):
         """Entry function for the Octopus Client."""
@@ -89,81 +83,87 @@ class OctopusClient():
         for agreement in agreements:
             if self._is_current(agreement):
                 self.logger.info(f"tariff is: {agreement.tariff_code}")
-                self._api_args.tariff_code = agreement.tariff_code
-                self._api_args.product_code = agreement.tariff_code[5:-2]
+                self._api.arguments.tariff_code = agreement.tariff_code
+                self._api.arguments.product_code = agreement.tariff_code[5:-2]
 
+    def _parse_gas_meterpoint(self, meter_point) -> None:
+        self._api.arguments.mprn = meter_point.mprn
+        self.logger.info(f"Gas mprn found: {self._api.arguments.mprn}")
+        for agreement in meter_point.agreements:
+            if self._is_current(agreement):
+                self.logger.info(f"Current Gas tariff is : {agreement.tariff_code}")
+                self._account_info.gas_tariff = agreement.tariff_code             
+                
+    def _parse_electricity_meterpoint(self, meter_point) -> None:
+        if meter_point.is_export:
+            self._api.arguments.export_mpan = meter_point.mpan
+            self.logger.info(f"Export mpan found: {self._api.arguments.export_mpan}")
+            for agreement in meter_point.agreements:
+                if self._is_current(agreement):
+                    self.logger.info(f"Current Export tariff is : {agreement.tariff_code}")
+                    self._account_info.export_tariff = agreement.tariff_code
+        else:
+            self._api.arguments.mpan = meter_point.mpan
+            self.logger.info(f"Import mpan found: {self._api.arguments.mpan}")
+            for agreement in meter_point.agreements:
+                if self._is_current(agreement):
+                    self.logger.info(f"Current Electricity tariff is : {agreement.tariff_code}")
+                    self._account_info.import_tariff = agreement.tariff_code                         
+                            
     def _get_account_information(self) -> None:
         """Populate information required for other API calls when provided an account ID and API key."""
-        self._account_info = self._call_api(api_name=APIList.Account.value)
+        self._account_info = self._call_api(api_name=APIList.Account)
         # Get the information for the first property in the account only
         for property in self._account_info.properties:
-            for meter_points in property.electricity_meter_points:
-                if meter_points.is_export is True:
-                    self._api_args.export_mpan = meter_points.mpan
-                    self.logger.info(f"Export mpan found: {self._api_args.export_mpan}")
-                    for agreement in meter_points.agreements:
-                        if self._is_current(agreement):
-                            self.logger.info(f"Current Export tariff is : {agreement.tariff_code}")
-                elif meter_points.is_export is False:
-                    self._api_args.mpan = meter_points.mpan
-                    self.logger.info(f"Import mpan found: {self._api_args.mpan}")
-                    for agreement in meter_points.agreements:
-                        if self._is_current(agreement):
-                            self.logger.info(f"Current Electricity tariff is : {agreement.tariff_code}")
-            for meter_points in property.gas_meter_points:
-                self._api_args.mprn = meter_points.mprn
-                self.logger.info(f"Gas mprn found: {self._api_args.mprn}")
-                for agreement in meter_points.agreements:
-                    if self._is_current(agreement):
-                        self.logger.info(f"Current Gas tariff is : {agreement.tariff_code}")
+            for meter_point in property.electricity_meter_points:
+                self._parse_electricity_meterpoint(meter_point)                
+            for meter_point in property.gas_meter_points:
+                self._parse_gas_meterpoint(meter_point)
 
-    def _validate_mpan(self) -> dict:
+    def _validate_mpan(self) -> octopusapi.const.RegionID:
         """Query the provided meter point to get the grid supply point."""
-        result = self._call_api(api_name=APIList.ElectricityMeterPoints.value)
-        self.logger.debug(f'Grid supply point: {result.gsp}')
+        result = self._call_api(api_name=APIList.ElectricityMeterPoints)
+        self.logger.debug(f'Grid supply point: {result.gsp.value}')
         return result.gsp
 
-    def _check_postcode(self) -> str:
+    def _check_postcode(self) -> octopusapi.const.RegionID:
         """Return a group id for a particular postcode."""
-        result = self._call_api(api_name=APIList.SupplyPoints.value)
+        result = self._call_api(api_name=APIList.SupplyPoints)
         self.logger.info(f"Grid supply point: {result.results[0].group_id}")
         return result.results[0].group_id
 
-    def set_period_from(self, start) -> None:
+    def set_period_from(self, start: str | datetime) -> None:
         """Set the from data for any queries using either a string or datetime object."""
         if isinstance(start, str):
-            self._api_parms.period_from = datetime.strftime(dateutil.parser.parse(start), '%Y-%m-%dT%H:%MZ')
-        elif isinstance(start, datetime):
-            self._api_parms.period_from = datetime.strftime(start, '%Y-%m-%dT%H:%MZ')
+            start = dateutil.parser.parse(start)
+        self._api.parameters.period_from = datetime.strftime(start, '%Y-%m-%dT%H:%MZ')
 
-    def set_period_to(self, end) -> None:
+    def set_period_to(self, end: str | datetime) -> None:
         """Set the to data for any queries using either a string or datetime object."""
         if isinstance(end, str):
-            self._api_parms.period_to = datetime.strftime(dateutil.parser.parse(end), '%Y-%m-%dT%H:%MZ')
-        elif isinstance(end, datetime):
-            self._api_parms.period_to = datetime.strftime(end, '%Y-%m-%dT%H:%MZ')
+            end = dateutil.parser.parse(end)
+        self._api.parameters.period_to = datetime.strftime(end, '%Y-%m-%dT%H:%MZ')
 
-    def set_active_at(self, active=datetime.now()) -> None:
+    def set_active_at(self, active: str | datetime = datetime.now()) -> None:
         """Set the active at parameter for any queries using either a string or datetime object."""
         if isinstance(active, str):
-            self._api_parms.tariffs_active_at = datetime.strftime(dateutil.parser.parse(active), '%Y-%m-%dT%H:%MZ')
-        elif isinstance(active, datetime):
-            self._api_parms.tariffs_active_at = datetime.strftime(active, '%Y-%m-%dT%H:%MZ')
+            active = dateutil.parser.parse(active)
+        self._api.parameters.tariffs_active_at = datetime.strftime(active, '%Y-%m-%dT%H:%MZ')
 
     def set_page_size(self, size: int) -> None:
         """Set the page size for any queries."""
-        self._api_parms.page_size = size
+        self._api.parameters.page_size = size
 
     def set_group_by(self, time: str) -> None:
         """Set the group by interval for any queries."""
         for grouping in octopusapi.const.Group:
             if time == grouping.value:
-                self._api_parms.group_by = time
+                self._api.parameters.group_by = time
 
     @property
     def account_number(self) -> str:
         """The account number property."""
-        return self._api_args.account
+        return self._api.arguments.account
 
     def _set_startend(self, ago: int, days: int) -> None:
         """Sets the period_from and period_to arguments based on the input parameters
@@ -174,32 +174,24 @@ class OctopusClient():
         """
         start = datetime.combine(date.today() - timedelta(days=ago), datetime.min.time())
         end = start + timedelta(days=days) - timedelta(minutes=5)
+        # print("setting", start,end)
         self.set_period_from(start)
         self.set_period_to(end)
 
-    def get_gas_consumption(self, intervals=48, ago: int = 7, days: int = 7) -> dict:
+    def get_gas_consumption(self, ago: int = 7, days: int = 7) -> dict:
         """Get gas consumption information."""
         self._set_startend(ago, days)
-        # self.set_page_size(intervals)
-        response = {}
-        for property in self._account_info.properties:
-            for meter_point in property.gas_meter_points:
-                for meter in meter_point.meters:
-                    self._api_args.gas_serial_number = meter.serial_number
-                    results = self._call_api(api_name=APIList.GasConsumption.value)
-                    # If we get any data back
-                    if results.count > 0:
-                        # If this is the first result then set the response equal to the results
-                        if not response:
-                            response = results
-                        # Otherwise append the results to the results
-                        else:
-                            response.results += results.results
-                            response.count += results.count
-                if response:
-                    return response.results
-                else:
-                    return None
+        response = {'results': [], 'count': 0}
+        meters = (meter for property in self._account_info.properties
+                    for meter_point in property.gas_meter_points
+                    for meter in meter_point.meters)        
+        for meter in meters:                    
+            self._api.arguments.gas_serial_number = meter.serial_number
+            results = self._call_api(api_name=APIList.GasConsumption)
+            if results.count > 0:
+                response['results'] += results.results
+                response['count'] += results.count
+        return response['results']
 
     def get_electricity_consumption_byrange(self, ago: int = 1, days: int = 1, daily: bool = True) -> dict:
         """Get electricity consumption information.
@@ -212,24 +204,19 @@ class OctopusClient():
             dict: _description_
         """
         self._set_startend(ago, days)
-        self._api_parms.group_by = None
+        self._api.parameters.group_by = None
         consumption = self.get_electricity_consumption(ago=ago, days=days)
         price_range = self.price_ranges
-        prices = self.import_prices
-        price_dict = {}
-        usage = {}
-        for price in prices:
-            price_dict[price.valid_from] = price
+        price_dict = {price.valid_from: price for price in self.import_prices}        
         currentcost = iter(sorted(price_dict.keys()))
         coststart = next(currentcost)
+        date_format = '%Y-%m-%dT00:00Z' if daily else '%Y-%m-01T00:00Z'        
+        usage = defaultdict(dict)        
+        #print(price_dict)
         for entry in consumption:
-            # Get the date in UTC
-            if daily is True:
-                date = entry.interval_start.astimezone(timezone.utc).strftime('%Y-%m-%dT00:00Z')
-            else:
-                date = entry.interval_start.astimezone(timezone.utc).strftime('%Y-%m-01T00:00Z')
-            if usage.get(date) is None:
-                usage.update({date: {}})
+            #date=entry.interval_start.date()
+            date = entry.interval_start.astimezone(timezone.utc).strftime(date_format)
+            #print(entry.interval_start.date(), date)
             # find the right price to start with
             while price_dict[coststart].valid_to <= entry.interval_start:
                 coststart = next(currentcost)
@@ -238,114 +225,111 @@ class OctopusClient():
                 usage[date][pricetype] = round(usage[date].setdefault(pricetype, 0) + entry.consumption, 2)
         return usage
 
-    def get_electricity_consumption(self, intervals=48, ago: int = 7, days: int = 7) -> dict:
+    def get_electricity_consumption(self, ago: int = 7, days: int = 7) -> dict:
         """Get electricity consumption information."""
         self._set_startend(ago, days)
-        # self.set_page_size(intervals)
-        response = {}
-        for property in self._account_info.properties:
-            for meter_point in property.electricity_meter_points:
-                if meter_point.is_export is False:
-                    for meter in meter_point.meters:
-                        self._api_args.electricity_serial_number = meter.serial_number
-                        results = self._call_api(api_name=APIList.ElectricityConsumption.value)
-                        # If we get any data back
-                        if results.count > 0:
-                            # If this is the first result then set the response equal to the results
-                            if not response:
-                                response = results
-                            # Otherwise append the results to the results
-                            else:
-                                response.results += results.results
-                                response.count += results.count
-                    if response:
-                        return response.results
-                    else:
-                        return None
+        response = {'results': [], 'count': 0}
+        meters = (meter for property in self._account_info.properties
+            for meter_point in property.electricity_meter_points
+            for meter in meter_point.meters if not meter_point.is_export)  
+        for meter in meters:
+            self._api.arguments.electricity_serial_number = meter.serial_number
+            results = self._call_api(api_name=APIList.ElectricityConsumption)
+            if results.count > 0:
+                response['results'] += results.results
+                response['count'] += results.count
+        return response['results'] 
 
-    def get_electricity_export(self, intervals=48, ago: int = 7, days: int = 7) -> dict:
+
+    def get_electricity_export(self, ago: int = 7, days: int = 7) -> dict | None:
         """Get electricity export information."""
         self._set_startend(ago, days)
-        # self.set_page_size(intervals)
-        response = {}
-        for property in self._account_info.properties:
-            for meter_point in property.electricity_meter_points:
-                if meter_point.is_export is True:
-                    for meter in meter_point.meters:
-                        self._api_args.export_serial_number = meter.serial_number
-                        results = self._call_api(api_name=APIList.ElectricityExport.value)
-                        # If we get any data back
-                        if results.count > 0:
-                            # If this is the first result then set the response equal to the results
-                            if not response:
-                                response = results
-                            # Otherwise append the results to the results
-                            else:
-                                response.results += results.results
-                                response.count += results.count
-                    if response:
-                        return response.results
-                    else:
-                        return None
+        response = {'results': [], 'count': 0}
+        meters = (meter for property in self._account_info.properties
+            for meter_point in property.electricity_meter_points
+            for meter in meter_point.meters if meter_point.is_export)  
+        for meter in meters:        
+            self._api.arguments.export_serial_number = meter.serial_number
+            results = self._call_api(api_name=APIList.ElectricityExport)
+            if results.count > 0:
+                response['results'] += results.results
+                response['count'] += results.count
+        return response['results']
+
+
+    def get_standard_unit_rates(self) -> octopusapi.const.rates:
+        return self._call_api(api_name=APIList.ElectricityStandardUnitRates).results
+    
+    def get_gas_standard_unit_rates(self) -> octopusapi.const.rates:
+        return self._call_api(api_name=APIList.GasStandardUnitRates).results
+        
+    def get_electricity_prices(self, ago: int = 7) -> octopusapi.const.rates:
+        """Calculate the total cost for electricity for a day."""
+        self.import_product
+        self._set_startend(ago, ago)
+        # Get the unit rates and store the value for each interval
+        return self.get_standard_unit_rates()
+
+    def _calculate_price(self, rates, amount) -> dict: 
+        price = {}
+        cost_iterator = iter(sorted(rates.keys()))
+        coststart = next(cost_iterator)
+        current_cost = coststart        
+        for interval_start in sorted(amount.keys()):
+            # Iterate over the cost data until we find an interval that starts after the current time        
+            # use the prior interval for the cost
+            while interval_start >= coststart:
+                current_cost = coststart
+                try:
+                    coststart = next(cost_iterator)
+                except StopIteration:
+                    break
+            day = interval_start.date()
+            # Then multiply the consumption by the rate to get the cost
+            price[day] = price.setdefault(day, 0) + round(round(amount[interval_start].consumption, 2)
+                                                        * rates[current_cost], 3)
+            # print(interval_start, amount[interval_start].consumption, rates[current_cost] )
+        return price
 
     def calculate_electricity_cost(self, ago: int = 7) -> dict:
         """Calculate the total cost for electricity for a day."""
         self.import_product
-        self._set_startend(ago, 30)
+        self._set_startend(ago, ago)
         # Get the unit rates and store the value for each interval
-        result = self._call_api(api_name=APIList.ElectricityStandardUnitRates.value)
-        rates = {}
-        for entry in result.results:
-            rates[entry.valid_from] = entry.value_inc_vat
+        rates = {entry.valid_from: entry.value_inc_vat for entry in self.get_standard_unit_rates()}
         # Get the consumption values and store the values for each interval
-        self.import_product
-        result = self.get_electricity_consumption()
-        consumption = {}
-        for entry in result:
-            consumption[entry.interval_start] = entry
-        # Calculate the costs based on the rates and the consumption
-        cost = {}
-        currentcost = iter(sorted(rates.keys()))
-        coststart = next(currentcost)
-        for interval_start in sorted(consumption.keys()):
-            # Iterate over the cost data until we find an interval that starts at the current time
-            while interval_start <= coststart:
-                coststart = next(currentcost)
-            day = interval_start.date()
-            # Then multiply the consumption by the rate to get the cost
-            cost[day] = cost.setdefault(day, 0) + round(round(consumption[interval_start].consumption, 2)
-                                                        * rates[coststart], 3)
-
-        return cost
+        consumption = {entry.interval_start: entry for entry in self.get_electricity_consumption(ago, ago)}   
+        return self._calculate_price(rates,consumption)
 
     def calculate_electricity_gain(self, ago: int = 7) -> dict:
         """Calculate the total cost for electricity for a day."""
         self.export_product
-        self._set_startend(ago, 30)
+        self._set_startend(ago, ago)
         # Get the unit rates and store the value for each interval
-        result = self._call_api(api_name=APIList.ElectricityStandardUnitRates.value)
-        rates = {}
-        for entry in result.results:
-            rates[entry.valid_from] = entry.value_inc_vat
+        rates = {entry.valid_from: entry.value_inc_vat for entry in self.get_standard_unit_rates()}
         # Get the consumption values and store the values for each interval
-        result = self.get_electricity_export()
-        export = {}
-        for entry in result:
-            export[entry.interval_start] = entry
+        export = {entry.interval_start: entry for entry in self.get_electricity_export(ago, ago)}
         # Calculate the costs based on the rates and the consumption
-        gain = {}
-        currentcost: list = iter(sorted(rates.keys()))
-        coststart: float = next(currentcost)
-        for interval_start in sorted(export.keys()):
-            while interval_start <= coststart:
-                coststart = next(currentcost)
-            day: date = interval_start.date()
-            gain[day] = gain.setdefault(day, 0) + round(round(export[interval_start].consumption, 2)
-                                                        * rates[coststart], 3)
-        return gain
+        return self._calculate_price(rates,export)        
+
+    def _delete_redundant(self, data: octopusapi.const.product) -> octopusapi.const.product:
+        """Deletes entries in the product API data that is not relevant to the region ID
+        for the current account.
+        """
+        delete_items = ["single_register_electricity_tariffs",
+                        "dual_register_electricity_tariffs",
+                        "single_register_gas_tariffs",
+                        "sample_quotes"]
+        for item in delete_items:
+            if getattr(data, item) != {}:
+                for entry in octopusapi.const.RegionID:
+                    if entry != self._account_info.regionid:
+                        del getattr(data, item)[entry]
+        return data
+        
 
     @property
-    def import_product(self) -> dict:
+    def import_product(self) -> octopusapi.const.product:
         """Returns the details for the electricity import product for the account
         deleting the regions that are not relevant for the account
         """
@@ -353,21 +337,12 @@ class OctopusClient():
             for meter_point in property.electricity_meter_points:
                 if meter_point.is_export is False:
                     self._set_tariff_code(meter_point.agreements)
-        data = self._call_api(api_name=APIList.Product.value)
-        for entry in octopusapi.const.RegionID:
-            if entry.name == self._account_info.regionid:
-                pass
-            else:
-                if entry.name in data.single_register_electricity_tariffs:
-                    del data.single_register_electricity_tariffs[entry.name]
-                if entry.name in data.dual_register_electricity_tariffs:
-                    del data.dual_register_electricity_tariffs[entry.name]
-                if entry.name in data.sample_quotes:
-                    del data.sample_quotes[entry.name]
-        return data
+        data = self._call_api(api_name=APIList.Product)
+        return self._delete_redundant(data)
+
 
     @property
-    def export_product(self) -> dict:
+    def export_product(self) -> octopusapi.const.product:
         """Returns the details for the electricity export product for the account
         deleting the regions that are not relevant for the account
         """
@@ -375,55 +350,36 @@ class OctopusClient():
             for meter_point in property.electricity_meter_points:
                 if meter_point.is_export is True:
                     self._set_tariff_code(meter_point.agreements)
-        data = self._call_api(api_name=APIList.Product.value)
-        for entry in octopusapi.const.RegionID:
-            if entry.name == self._account_info.regionid:
-                pass
-            else:
-                if entry.name in data.single_register_electricity_tariffs:
-                    del data.single_register_electricity_tariffs[entry.name]
-                if entry.name in data.dual_register_electricity_tariffs:
-                    del data.dual_register_electricity_tariffs[entry.name]
-                if entry.name in data.sample_quotes:
-                    del data.sample_quotes[entry.name]
-        return data
+        data = self._call_api(api_name=APIList.Product)
+        # Delete redundant region information
+        return self._delete_redundant(data)
 
     @property
-    def gas_product(self) -> dict:
+    def gas_product(self) -> octopusapi.const.product:
         """Returns the details for the gas product for the account
         deleting the regions that are not relevant for the account
         """
         for property in self._account_info.properties:
             for meter_point in property.gas_meter_points:
                 self._set_tariff_code(meter_point.agreements)
-        data = self._call_api(api_name=APIList.Product.value)
-        for entry in octopusapi.const.RegionID:
-            if entry.name == self._account_info.regionid:
-                pass
-            else:
-                if entry.name in data.single_register_electricity_tariffs:
-                    del data.single_register_electricity_tariffs[entry.name]
-                if entry.name in data.dual_register_electricity_tariffs:
-                    del data.dual_register_electricity_tariffs[entry.name]
-                if entry.name in data.sample_quotes:
-                    del data.sample_quotes[entry.name]
-        return data
+        data = self._call_api(api_name=APIList.Product)
+        # Delete redundant region information
+        return self._delete_redundant(data)
 
     @property
     def price_ranges(self) -> dict:
         """Return a dict of prices broken down into peak/offpeak and standard."""
         self.import_product
-        data = self._call_api(api_name=APIList.ElectricityStandardUnitRates.value)
+        data = self.get_standard_unit_rates()
         price_list = []
         price_dict = {}
         prev_date = datetime.now().date()
-        for entry in data.results:
+        for entry in data:
             current_date = entry.valid_from.date()
             # Collect the prices for each date
-            if current_date == prev_date:
-                if entry.value_inc_vat not in price_list:
-                    if price_dict.get(entry.value_inc_vat) is None:
-                        price_list.append(entry.value_inc_vat)
+            if (current_date == prev_date) and (entry.value_inc_vat not in price_list):
+                if price_dict.get(entry.value_inc_vat) is None:
+                    price_list.append(entry.value_inc_vat)
             # As we get to the next date evaluate the prices from the previous day
             else:
                 price_list.sort()
@@ -439,132 +395,119 @@ class OctopusClient():
                     price_dict[price_list[2]] = PriceType.PEAK
                 # Then reset the price list and start for the new date
                 price_list = []
-                if entry.value_inc_vat not in price_list:
-                    if price_dict.get(entry.value_inc_vat) is None:
+                if (entry.value_inc_vat not in price_list) and (price_dict.get(entry.value_inc_vat) is None):
                         price_list.append(entry.value_inc_vat)
                 prev_date = current_date
         return price_dict
 
     @property
-    def import_prices(self) -> dict:
+    def region_name(self) -> str:
+        """Return the name of the region."""
+        return self._account_info.regionid.value
+    
+    @property
+    def import_prices(self) -> octopusapi.const.rate:
         """Return a list of the prices over time."""
         self.import_product
-        data = self._call_api(api_name=APIList.ElectricityStandardUnitRates.value)
-        return data.results
+        return self.get_standard_unit_rates()
 
     @property
-    def electricity_standing_charge(self) -> float:
+    def electricity_standing_charge(self) -> float | None:
         """Get the current standing charge."""
         self.import_product
-        data = self._call_api(api_name=APIList.ElectricityStandingCharges.value)
+        data = self._call_api(api_name=APIList.ElectricityStandingCharges)
         for entry in data.results:
             if self._is_current(entry) is True:
                 return entry.value_inc_vat
         return None
 
     @property
-    def current_export_price(self) -> float:
+    def current_export_price(self) -> float | None:
         """Get the current electricity export price."""
         self.export_product
-        data = self._call_api(api_name=APIList.ElectricityStandardUnitRates.value)
-        for entry in data.results:
+        for entry in self.get_standard_unit_rates():
             if self._is_current(entry) is True:
                 return entry.value_inc_vat
         return None
 
     @property
-    def current_import_price(self) -> float:
+    def current_import_price(self) -> float | None:
         """Get the current electricity import price."""
         self.import_product
-        data = self._call_api(api_name=APIList.ElectricityStandardUnitRates.value)
-        for entry in data.results:
+        for entry in self.get_standard_unit_rates():
             if self._is_current(entry) is True:
                 return entry.value_inc_vat
         return None
 
     @property
-    def current_gas_price(self) -> float:
+    def current_gas_price(self) -> float | None:
         """Get the current gas price."""
         self.gas_product
-        data = octopusapi.const.rates(**self._call_api(api_name=APIList.GasStandardUnitRates.value))
-        for entry in data.results:
+        for entry in self.get_gas_standard_unit_rates():
             if self._is_current(entry) is True:
                 return entry.value_inc_vat
         return None
 
     @property
-    def gas_standing_charge(self) -> float:
+    def gas_standing_charge(self) -> float | None:
         """Get the current gas standing charge ."""
         self.gas_product
-        data = octopusapi.const.rates(**self._call_api(api_name=APIList.GasStandingCharges.value))
+        data = self._call_api(api_name=APIList.GasStandingCharges)
         for entry in data.results:
             if self._is_current(entry) is True:
                 return entry.value_inc_vat
         return None
 
-    def _call_api(self, api_name: str = APIList.Products.value) -> dict:
+    def _call_api(self, api_name: octopusapi.const.Endpoint = APIList.Products) -> Callable:
         """Initialise the arguments required to call one of the REST APIs and then call it returning the results."""
-        api_object = api_name
+        self.logger.info("Calling Octopus API: %s", api_name.name)        
         # If the API request requires a key and we do not have one
-        if (api_object.auth is True) & (self._user is None):
+        if (api_name.value.auth is True) and (self._user is None):
             raise APIKeyError(api_name)
         # Create a dictionary entry for the arguments required by the endpoint
-        arguments = {}
-        for entry in api_object.arguments:
-            arguments.update({entry.value: getattr(self._api_args, entry.value)})
+        arguments = {
+            entry.value: getattr(self._api.arguments, entry.value)
+            for entry in api_name.value.arguments
+        }  
         # Create a parameter string including any parameters for the endpoint which have a defined value
-        parm_string = ""
-        for entry in api_object.parms:
-            if getattr(self._api_parms, entry.value) is not None:
-                if parm_string == "":
-                    parm_string = f"?{entry.value}={getattr(self._api_parms, entry.value)}"
-                else:
-                    parm_string += f"&{entry.value}={getattr(self._api_parms, entry.value)}"
+        parm_string = "&".join(
+            f"{entry.value}={getattr(self._api.parameters, entry.value)}"
+            for entry in api_name.value.parms
+            if getattr(self._api.parameters, entry.value) is not None
+        )        
         # Create a URL from the supplied information
-        url = "{}/{}/{}".format(self._api.url,
-                                api_object.endpoint.format(**arguments),
-                                parm_string)
+        url = f"{self._api.url}/{api_name.value.endpoint.format(**arguments)}/?{parm_string}"             
         # Call the API endpoint and return the results
-        # print(self._rest_request(url, api_object.auth))
-        return api_object.response(**self._rest_request(url, api_object.auth))
+        return api_name.value.response(**self._rest_request(url, api_name.value.auth))
 
     def _rest_request(self, url: str, auth: bool = False) -> dict:
         """Use the requests module to call the REST API and check the response."""
         # Only pass the API key if it is required
-        if auth is True:
-            if self._user is None:
-                raise APIKeyError(url)
-            else:
-                authorisation = HTTPBasicAuth(self._user, self._passwd)
-        else:
-            authorisation = None
+        authorisation = HTTPBasicAuth(self._user, self._passwd) if auth else None
         # Initialize an empty dict for the response
         response = {}
         # Iterate while we have a valid url in order to handle the requirement for multiple queries
         while url is not None:
             try:
-                self.logger.info("Calling Octopus API: %s", url)
                 results = self._session.get(url=url, auth=authorisation, timeout=60)
-                self.logger.debug(f'Response received: {results}')
                 results.raise_for_status()
                 # Check the REST API response status
-                if results.status_code != requests.codes.ok:
-                    self.logger.error("API Error encountered for URL: %s Status Code: %s", url, results.status_code)
-            except requests.exceptions.HTTPError as err:
-                raise SystemExit(err)
             except requests.exceptions.RequestException as err:
-                raise SystemExit(err)
-            self.logger.debug("Formatted API results:\n %s", json.dumps(results.json(), indent=2))
+                self.logger.error(f"Requests error encountered: {err}")
+                raise err
+            #results_json = results.json()
+            results_json = ujson.loads(results.text)
+            self.logger.debug("Formatted API results:\n %s", ujson.dumps(results_json, indent=2))
             # If this is the first result then return the json data
             if not response:
-                response = results.json()
+                response = results_json
             # Otherwise we are adding to an existing dict and we should concatenate the results
             else:
-                response["results"] += results.json()["results"]
-                response["count"] += results.json()["count"]
+                response["results"] += results_json["results"]
+                response["count"] +=  results_json["count"]
             # If we are told this is not the last response in a list then we need to iterate
-            if "next" in results.json():
-                url = results.json()["next"]
+            if "next" in results_json:
+                url = results_json["next"]
             # Otherwise end the iteration
             else:
                 break
@@ -572,30 +515,11 @@ class OctopusClient():
 
     def _is_current(self, entry: dict) -> bool:
         """Determine if an entry is current based on the valid_from and valid_to fields."""
-        result = True
-        if getattr(entry, APIConstants.VALID_FROM.value) is not None:
-            from_date = getattr(entry, APIConstants.VALID_FROM.value)
-            if from_date > datetime.now(from_date.tzinfo):
-                result = False
-        if getattr(entry, APIConstants.VALID_TO.value) is not None:
-            to_date = getattr(entry, APIConstants.VALID_TO.value)
-            if to_date < datetime.now(from_date.tzinfo):
-                result = False
-        self.logger.debug(f'From date: {getattr(entry, APIConstants.VALID_FROM.value)} '
-                          f'To date: {getattr(entry, APIConstants.VALID_TO.value)} Result: {result}')
-        return result
+        from_date = getattr(entry, APIConstants.VALID_FROM.value)           
+        return self._is_between(entry, datetime.now(timezone.utc))
 
     def _is_between(self, entry: dict, time: datetime) -> bool:
         """Determine if an entry is the correct one based on the valid_from and valid_to fields."""
-        result = True
-        if entry[APIConstants.VALID_FROM.value] is not None:
-            from_date = dateutil.parser.parse(entry[entry.valid_from.name])
-            if from_date > time:
-                result = False
-        if entry[APIConstants.VALID_TO.value] is not None:
-            to_date = dateutil.parser.parse(entry[APIConstants.VALID_TO.value])
-            if to_date < time:
-                result = False
-        self.logger.debug(f'From date: {entry[APIConstants.VALID_FROM.value]} '
-                          f'To date: {entry[APIConstants.VALID_TO.value]} Time: {time} Result: {result}')
-        return result
+        from_date = getattr(entry, APIConstants.VALID_FROM.value)        
+        to_date = getattr(entry, APIConstants.VALID_TO.value)           
+        return (from_date is None or from_date <= time) and (to_date is None or to_date >= time)
