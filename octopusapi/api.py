@@ -210,13 +210,12 @@ class OctopusClient():
         price_dict = {price.valid_from: price for price in self.import_prices}        
         currentcost = iter(sorted(price_dict.keys()))
         coststart = next(currentcost)
-        date_format = '%Y-%m-%dT00:00Z' if daily else '%Y-%m-01T00:00Z'        
         usage = defaultdict(dict)        
-        #print(price_dict)
         for entry in consumption:
-            #date=entry.interval_start.date()
-            date = entry.interval_start.astimezone(timezone.utc).strftime(date_format)
-            #print(entry.interval_start.date(), date)
+            if daily:
+                date = entry.interval_start.replace(hour=0, minute=0, second=0, microsecond=0) 
+            else:
+                date = entry.interval_start.replace(day=1, hour=0, minute=0, second=0, microsecond=0) 
             # find the right price to start with
             while price_dict[coststart].valid_to <= entry.interval_start:
                 coststart = next(currentcost)
@@ -495,8 +494,7 @@ class OctopusClient():
             except requests.exceptions.RequestException as err:
                 self.logger.error(f"Requests error encountered: {err}")
                 raise err
-            #results_json = results.json()
-            results_json = ujson.loads(results.text)
+            results_json = results.json()
             self.logger.debug("Formatted API results:\n %s", ujson.dumps(results_json, indent=2))
             # If this is the first result then return the json data
             if not response:
