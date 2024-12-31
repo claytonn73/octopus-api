@@ -81,7 +81,7 @@ class APIArgs(Enum):
     TARIFF_CODE = "tariff_code"
 
 
-@dataclass
+@dataclass(slots=True)
 class apiargs:
     account: str = None
     tariff: str = None
@@ -113,53 +113,55 @@ class APIParms(Enum):
     PAGE = "page"
     ACCOUNT = "account"
 
+class DatetimeFormat(Enum):
+    OCTOPUSDATETIME = '%Y-%m-%dT%H:%MZ'
 
-@dataclass
+@dataclass(slots=True)
 class apiparms:
-    period_from: datetime = (
-        datetime.now()-timedelta(days=1)).strftime('%Y-%m-%dT%H:%MZ')
-    period_to: datetime = datetime.now().strftime('%Y-%m-%dT%H:%MZ')
+    period_from: str = (
+        datetime.now()-timedelta(days=1)).strftime(DatetimeFormat.OCTOPUSDATETIME.value)
+    period_to: datetime = datetime.now().strftime(DatetimeFormat.OCTOPUSDATETIME.value)
     page_size: int = 9999
     order_by: str = Order.FORWARD.value
-    group_by: str = None
+    group_by: str = Group.DAY.value
     postcode: str = None
-    tariffs_active_at: datetime = datetime.now().strftime('%Y-%m-%dT%H:%MZ')
+    tariffs_active_at: str = datetime.now().strftime(DatetimeFormat.OCTOPUSDATETIME.value)
     is_prepay: bool = False
     is_variable: bool = False
     is_green: bool = False
     is_tracker: bool = False
     is_business: bool = False
-    available_at: datetime = datetime.now().strftime('%Y-%m-%dT%H:%MZ')
+    available_at: str = datetime.now().strftime(DatetimeFormat.OCTOPUSDATETIME.value)
     page: int = 1
     account: str = None
 
 
-@dataclass
+@dataclass(slots=True)
 class register:
     identifier: str
     rate: str
     is_settlement_register: bool
 
 
-@dataclass
+@dataclass(slots=True)
 class electricity_meter(baseclass):
     serial_number: str
     registers: List[register]
 
 
-@dataclass
+@dataclass(slots=True)
 class gas_meter:
     serial_number: str
 
 
-@dataclass
+@dataclass(slots=True)
 class agreement(baseclass):
     tariff_code: str
     valid_from: datetime
     valid_to: datetime
 
 
-@dataclass
+@dataclass(slots=True)
 class electricity_meter_point(baseclass):
     mpan: str
     profile_class: int
@@ -171,7 +173,7 @@ class electricity_meter_point(baseclass):
     consumption_standard: int = 0
 
 
-@dataclass
+@dataclass(slots=True)
 class gas_meter_point(baseclass):
     mprn: str
     consumption_standard: int
@@ -179,7 +181,7 @@ class gas_meter_point(baseclass):
     agreements: List[agreement]
 
 
-@dataclass
+@dataclass(slots=True)
 class property(baseclass):
     id: int
     moved_in_at: datetime
@@ -195,7 +197,7 @@ class property(baseclass):
     gas_meter_points: List[gas_meter_point] = field(default_factory=list)
 
 
-@dataclass
+@dataclass(slots=True)
 class account(baseclass):
     number: str = ""
     properties: List[property] = field(default_factory=list)
@@ -209,7 +211,7 @@ Account = Endpoint(auth=True,
                    response=account)
 
 
-@dataclass
+@dataclass(slots=True)
 class supplypoint(baseclass):
     code: str
     count: int
@@ -223,14 +225,14 @@ SupplyPoints = Endpoint(endpoint="v1/industry/grid-supply-points",
                         response=supplypoint)
 
 
-@dataclass
+@dataclass(slots=True)
 class link:
     href: str
     method: str
     rel: str
 
 
-@dataclass
+@dataclass(slots=True)
 class productsdata(baseclass):
     code: str
     direction: str
@@ -250,7 +252,7 @@ class productsdata(baseclass):
     is_restricted: bool = False
 
 
-@dataclass
+@dataclass(slots=True)
 class products(baseclass):
     count: int
     next: str
@@ -264,7 +266,7 @@ Products = Endpoint(endpoint="v1/products",
                     response=products)
 
 
-@dataclass
+@dataclass(slots=True)
 class tariff(baseclass):
     code: str
     standing_charge_exc_vat: float
@@ -285,20 +287,20 @@ class tariff(baseclass):
     standard_unit_rate_inc_vat: float = 0
 
 
-@dataclass
+@dataclass(slots=True)
 class tariff_type(baseclass):
     direct_debit_monthly: tariff = field(default_factory=dict)
     direct_debit_quarterly: tariff = field(default_factory=dict)
     varying: tariff = field(default_factory=dict)
 
 
-@dataclass
+@dataclass(slots=True)
 class rate_cost:
     annual_cost_inc_vat: int
     annual_cost_exc_vat: int
 
 
-@dataclass
+@dataclass(slots=True)
 class quote_type(baseclass):
     electricity_single_rate: rate_cost = None
     electricity_dual_rate: rate_cost = None
@@ -306,14 +308,14 @@ class quote_type(baseclass):
     dual_fuel_dual_rate: rate_cost = None
 
 
-@dataclass
+@dataclass(slots=True)
 class sample_quote(baseclass):
     direct_debit_monthly: quote_type = None
     direct_debit_quarterly: quote_type = None
     varying: quote_type = None
 
 
-@dataclass
+@dataclass(slots=True)
 class rate_type:
     electricity_standard: int = 0
     electricity_day: int = 0
@@ -321,7 +323,7 @@ class rate_type:
     gas_standard: int = 0
 
 
-@dataclass
+@dataclass(slots=True)
 class sample_consumption_data(baseclass):
     electricity_single_rate: rate_type = None
     electricity_dual_rate: rate_type = None
@@ -329,7 +331,7 @@ class sample_consumption_data(baseclass):
     dual_fuel_dual_rate: rate_type = None
 
 
-@dataclass
+@dataclass(slots=True)
 class product(baseclass):
     code: str
     full_name: str
@@ -360,7 +362,7 @@ Product = Endpoint(endpoint="v1/products/{product_code}",
                    response=product)
 
 
-@dataclass
+@dataclass(slots=True)
 class meterpoint(baseclass):
     gsp: RegionID
     mpan: str
@@ -372,7 +374,7 @@ ElectricityMeterPoints = Endpoint(endpoint="v1/electricity-meter-points/{mpan}",
                                   response=meterpoint)
 
 
-@dataclass(order=True)
+@dataclass(slots=True, order=True)
 class rate(baseclass):
     value_exc_vat: float
     value_inc_vat: float
@@ -381,7 +383,7 @@ class rate(baseclass):
     payment_method: str = None
 
 
-@dataclass
+@dataclass(slots=True)
 class rates(baseclass):
     count: int
     next: str
@@ -426,14 +428,14 @@ GasStandardUnitRates = Endpoint(
     response=rates)
 
 
-@dataclass
+@dataclass(slots=True)
 class usagedata(baseclass):
     consumption: float
     interval_start: datetime
     interval_end: datetime
 
 
-@dataclass
+@dataclass(slots=True)
 class usage(baseclass):
     count: int
     next: str
@@ -467,14 +469,14 @@ ElectricityExport = Endpoint(
     response=usage)
 
 
-@dataclass
+@dataclass(slots=True)
 class usagegroup(baseclass):
     date: datetime.date
     consumption: float = 0
     pricerange: PriceType = PriceType.STANDARD
 
 
-@dataclass
+@dataclass(slots=True)
 class groupedusage(baseclass):
     date: datetime.date
     usage: list[usagegroup] = field(default_factory=list)
