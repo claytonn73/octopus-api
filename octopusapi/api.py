@@ -506,7 +506,8 @@ class OctopusClient():
                 self.logger.error("Requests error encountered: %s", err)
                 raise err
             results_json = results.json()
-            self.logger.debug("Formatted API results:\n %s", ujson.dumps(results_json, indent=2))
+            if self.logger.isEnabledFor(logging.DEBUG):            
+                self.logger.debug("Formatted API results:\n %s", ujson.dumps(results_json, indent=2))
             # If this is the first result then return the json data
             if not response:
                 response = results_json
