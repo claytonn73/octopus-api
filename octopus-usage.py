@@ -1,76 +1,56 @@
 #!/usr/bin/env python3
 """Gas and Electricity usage from the Octopus API."""
 
-
-import asyncio
-import logging
-import logging.handlers
-import os
-
-from dotenv import dotenv_values
-
-from influxconnection import InfluxConnection
 from octopusapi.api import OctopusClient
+from utilities import InfluxConnection, get_env, get_logger
+
+logger = get_logger(destination="syslog")
 
 
-def get_logger():
-    """Log messages to the syslog."""
-    logger = logging.getLogger()
-    handler = logging.handlers.SysLogHandler(facility=logging.handlers.SysLogHandler.LOG_DAEMON, address='/dev/log')
-    logger.setLevel(logging.WARN)
-    logger.addHandler(handler)
-    # logger.addHandler(logging.StreamHandler(sys.stdout))
-    log_format = 'python[%(process)d]: [%(levelname)s] %(filename)s:%(funcName)s:%(lineno)d \"%(message)s\"'
-    handler.setFormatter(logging.Formatter(fmt=log_format))
-    return logger
-
-
-def log_usage(usage, influxdb, influx_tags, measurement):
+def log_usage(usage, influxdb, account_number, measurement) -> None:
     """Load usage data into influxdb."""
-    if usage is not None:
-        for data in usage:
-            influx_fields = {
-                'consumption': data.consumption,
-                'month': data.interval_start.strftime("%b %Y")
-            }
-            influx_data = [
-                {
-                    'measurement': measurement,
-                    'time': data.interval_start.strftime("%Y-%m-%dT%H:%MZ"),
-                    'tags': influx_tags,
-                    'fields': influx_fields,
-                }
-            ]
-            influxdb.write_points(influx_data)
+    influx_data = [
+        {
+            "measurement": measurement,
+            "time": data.interval_start.strftime("%Y-%m-%dT%H:%MZ"),
+            "tags": {
+                "account_number": account_number,
+                "month": data.interval_start.strftime("%Y %m"),
+                "year": data.interval_start.strftime("%Y"),
+            },
+            "fields": {
+                "consumption": data.consumption,
+            },
+        }
+        for data in usage
+    ]
+    logger.info("Adding  Octopus usage information to influxdb")
+    influxdb.write_points(influx_data)
 
 
-async def main():
+def main() -> None:  # sourcery skip: extract-method
     """Query historical data and load into influxdb."""
-    logger = get_logger()
-    env_path = os.path.expanduser('~/.env')
-    if os.path.exists(env_path):
-        env = dotenv_values(env_path)
 
-    with InfluxConnection() as connection:
-        with OctopusClient(apikey=env.get('octopus_apikey'), account=env.get('octopus_account')) as client:
-
+    env = get_env()
+    ago = 30
+    days = 30
+    measurements = [
+        ("gas_consumption", "get_gas_consumption"),
+        ("electricity_consumption", "get_electricity_consumption"),
+        ("electricity_export", "get_electricity_export"),
+    ]
+    with InfluxConnection(database="octopus", reset=False).connect() as connection:
+        with OctopusClient(apikey=env.get("octopus_apikey"), account=env.get("octopus_account")) as client:
             client.set_page_size(25000)
             client.set_group_by("day")
-            influx_tags = {
-                'account_number': client.account_number,
-            }
+            for measurement, method in measurements:
+                log_usage(
+                    getattr(client, method)(ago=ago, days=days),
+                    connection,
+                    client.account_number,
+                    measurement,
+                )
 
-            logger.info("Adding Octopus Usage information to influxdb")
-            usage = client.get_gas_consumption(ago=30, days=30)
-
-            log_usage(usage, connection.influxdb, influx_tags, 'gas_consumption')
-
-            usage = client.get_electricity_consumption(ago=30, days=30)
-            log_usage(usage, connection.influxdb, influx_tags, 'electricity_consumption')
-
-            usage = client.get_electricity_export(ago=30, days=30)
-            log_usage(usage, connection.influxdb, influx_tags, 'electricity_export')
 
 if __name__ == "__main__":
-
-    asyncio.run(main())
+    main()
